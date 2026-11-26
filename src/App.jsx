@@ -1,5 +1,5 @@
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 
 export default function App() {
@@ -7,6 +7,51 @@ export default function App() {
   const [displayName, setDisplayName] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [activeRoomId, setActiveRoomId] = useState(null);
+  const [participants, setParticipants] = useState([]);
+
+  async function loadParticipants(roomId) {
+    const { data, error } = await supabase
+      .from("room_participants")
+      .select("id, display_name, joined_at")
+      .eq("room_id", roomId)
+      .order("joined_at", { ascending: true });
+
+    if (error) {
+      console.error("Erro ao carregar participantes:", error);
+      return;
+    }
+
+    setParticipants(data || []);
+  }
+
+  useEffect(() => {
+    if (!activeRoomId) return;
+
+    const channel = supabase
+      .channel(`room-${activeRoomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_participants",
+          filter: `room_id=eq.${activeRoomId}`,
+        },
+        () => {
+          loadParticipants(activeRoomId);
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          loadParticipants(activeRoomId);
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeRoomId]);
 
   function generateRoomCode() {
     const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -35,26 +80,37 @@ export default function App() {
     try {
       const code = generateRoomCode();
 
-      const { data, error } = await supabase
+      const { data: room, error: roomError } = await supabase
         .from("rooms")
         .insert({
           code,
           host_name: name,
         })
-        .select("code")
+        .select("id, code")
         .single();
 
-      if (error) throw error;
+      if (roomError) throw roomError;
 
-      setRoomCode(data.code);
-      setNotice(
-        `Sala criada com sucesso! Compartilhe este código: ${data.code}`
-      );
+      const { error: participantError } = await supabase
+        .from("room_participants")
+        .insert({
+          room_id: room.id,
+          display_name: name,
+        });
+
+      if (participantError) {
+        setRoomCode(room.code);
+        throw new Error(
+          `A sala ${room.code} foi criada, mas não foi possível registrar sua entrada: ${participantError.message}`
+        );
+      }
+
+      setRoomCode(room.code);
+      setActiveRoomId(room.id);
+      setNotice(`Sala criada! Código: ${room.code}`);
     } catch (error) {
       console.error("Erro ao criar sala:", error);
-      setNotice(
-        "Não foi possível criar a sala. Verifique sua conexão e tente novamente."
-      );
+      setNotice(error.message || "Não foi possível criar a sala.");
     } finally {
       setLoading(false);
     }
@@ -70,30 +126,38 @@ export default function App() {
     }
 
     setLoading(true);
-    setNotice("Verificando sala...");
+    setNotice("Procurando sala...");
 
     try {
-      const { data, error } = await supabase
+      const { data: room, error: roomError } = await supabase
         .from("rooms")
-        .select("id, code, host_name")
+        .select("id, code")
         .eq("code", code)
         .maybeSingle();
 
-      if (error) throw error;
+      if (roomError) throw roomError;
 
-      if (!data) {
-        setNotice("Sala não encontrada. Confira o código informado.");
+      if (!room) {
+        setNotice("Sala não encontrada. Confira o código.");
         return;
       }
 
-      setRoomCode(data.code);
-      setNotice(
-        `Sala ${data.code} encontrada! A conexão dos participantes será implementada na próxima etapa.`
-      );
+      const { error: participantError } = await supabase
+        .from("room_participants")
+        .insert({
+          room_id: room.id,
+          display_name: name,
+        });
+
+      if (participantError) throw participantError;
+
+      setRoomCode(room.code);
+      setActiveRoomId(room.id);
+      setNotice(`Você entrou na sala ${room.code}!`);
     } catch (error) {
-      console.error("Erro ao consultar sala:", error);
+      console.error("Erro ao entrar na sala:", error);
       setNotice(
-        "Não foi possível consultar a sala. Verifique sua conexão e tente novamente."
+        "Não foi possível entrar na sala. Verifique sua conexão e tente novamente."
       );
     } finally {
       setLoading(false);
@@ -104,6 +168,7 @@ export default function App() {
     <main className="page">
       <header className="topbar">
         <div className="brand-mark">OC</div>
+
         <div>
           <p className="eyebrow">
             ESTÚDIO DE APRENDIZADO COLETIVO
@@ -112,6 +177,7 @@ export default function App() {
             Ogro Não, <span>Ciclope</span>
           </h1>
         </div>
+
         <div className="status">
           <i /> PRÉ-VERSÃO
         </div>
@@ -122,11 +188,13 @@ export default function App() {
           <p className="eyebrow">
             UMA SALA. UMA INTELIGÊNCIA. TODO MUNDO JUNTO.
           </p>
+
           <h2>
             Estudar em grupo,
             <br />
             <span>com uma IA compartilhada.</span>
           </h2>
+
           <p className="intro">
             Entre em uma sala de voz, envie seus materiais e estude
             com seus colegas. A mesma pergunta e a mesma resposta
@@ -148,6 +216,7 @@ export default function App() {
             <p className="eyebrow">COMECE POR AQUI</p>
             <h3>Entrar em uma sala</h3>
           </div>
+
           <div className="people">
             ♧ <b>Até 6 participantes</b>
           </div>
@@ -198,10 +267,32 @@ export default function App() {
           </p>
         )}
 
+        {activeRoomId && (
+          <section className="participants">
+            <h3>Participantes na sala</h3>
+            <p>Código: {roomCode}</p>
+
+            {participants.length === 0 ? (
+              <p>Carregando participantes...</p>
+            ) : (
+              <ul>
+                {participants.map((participant) => (
+                  <li key={participant.id}>
+                    {participant.display_name}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p>
+              {participants.length} participante(s) registrado(s).
+            </p>
+          </section>
+        )}
+
         <p className="privacy">
-          A criação e a consulta de salas estão conectadas ao banco
-          de dados. Voz compartilhada e comunicação em tempo real
-          ainda serão implementadas.
+          Salas e participantes conectados ao banco de dados.
+          A comunicação por voz ainda será implementada.
         </p>
       </section>
 
