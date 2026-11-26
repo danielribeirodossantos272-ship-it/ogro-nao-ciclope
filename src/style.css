@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+:root{font-family:'DM Sans',sans-serif;color:#f4f2f7;background:#0c0c10;font-synthesis:none;text-rendering:optimizeLegibility}
+*{box-sizing:border-box}
+body{margin:0;min-width:320px;background:radial-gradient(ellipse at 80% 12%,#292039 0,transparent 34%),#0c0c10}
+button,input{font:inherit}
+.page{width:min(100% - 36px,980px);margin:auto;padding:28px 0 24px}
+.topbar{display:flex;align-items:center;gap:13px;border-bottom:1px solid #ffffff16;padding-bottom:22px}
+.brand-mark{width:44px;height:44px;display:grid;place-items:center;border:1px solid #a78bfa88;border-radius:14px;color:#c4b5fd;font-family:'Space Grotesk';font-weight:700;background:#a78bfa12}
+.eyebrow{font-size:10px;letter-spacing:1.8px;color:#a99bbd;font-weight:700;margin:0 0 6px}
+h1{font:600 20px 'Space Grotesk';margin:0;letter-spacing:-.6px}
+h1 span,.hero h2 span{color:#b9a2ff}
+.status{margin-left:auto;font-size:9px;letter-spacing:1px;color:#c4b5fd;border:1px solid #a78bfa55;padding:7px 9px;border-radius:20px;white-space:nowrap}
+.status i{display:inline-block;width:6px;height:6px;background:#a78bfa;border-radius:50%;margin:0 5px 1px 0}
+.hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:52px 0 38px}
+.hero-copy{max-width:590px}
+.hero h2{font:600 clamp(32px,7vw,54px)/1.08 'Space Grotesk';letter-spacing:-2px;margin:12px 0 16px}
+.intro{color:#aaa5b4;line-height:1.7;max-width:520px;font-size:14px}
+.orb-wrap{width:190px;flex:0 0 190px;display:grid;justify-items:center;gap:13px}
+.orb{width:142px;height:142px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 35% 30%,#d8c9ff,#8b5cf6 32%,#35235c 62%,#15111e 75%);box-shadow:0 0 55px #8b5cf655,inset -12px -14px 30px #08070d}
+.orb-core{width:45px;height:45px;border:1px solid #ffffff88;border-radius:50%;box-shadow:0 0 28px #fff8}
+.orb-label{font-size:9px;letter-spacing:2px;color:#a99bbd}
+.panel{border:1px solid #ffffff1b;background:linear-gradient(145deg,#19171f,#121116);border-radius:20px;padding:24px;box-shadow:0 18px 55px #0005}
+.panel-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+.panel h3{font:600 22px 'Space Grotesk';margin:0}
+.people{font-size:11px;color:#c9bddc;background:#ffffff09;padding:9px 11px;border-radius:20px}
+.panel label{display:block;font-size:11px;color:#c4bdcd;margin:14px 0 7px}
+.panel input{width:100%;background:#0d0c11;border:1px solid #ffffff20;border-radius:11px;padding:14px;color:#fff;outline:none}
+.panel input:focus{border-color:#a78bfa}
+.panel input::placeholder{color:#716b79}
+.actions{display:flex;gap:10px;margin-top:20px}
+button{border:0;border-radius:11px;padding:13px 17px;font-weight:700;font-size:12px;cursor:pointer}
+.primary{background:#a78bfa;color:#171020;flex:1}
+.primary span{float:right;font-size:17px;line-height:12px}
+.secondary{background:#ffffff0c;color:#e8e2f0;border:1px solid #ffffff1c}
+.notice{background:#a78bfa18;border:1px solid #a78bfa44;color:#ddd0ff;border-radius:10px;padding:11px;font-size:12px;line-height:1.5}
+.privacy{font-size:10px;color:#77717f;line-height:1.5;margin:16px 0 0}
+.features{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;padding:24px 0}
+.features article{padding:17px;border:1px solid #ffffff14;border-radius:15px;background:#ffffff05}
+.feature-icon{color:#b9a2ff;font-size:20px;margin-bottom:10px}
+.features h4{font:600 13px 'Space Grotesk';margin:0 0 7px}
+.features p{font-size:11px;line-height:1.6;color:#938d9b;margin:0}
+footer{text-align:center;color:#6f6878;font-size:9px;letter-spacing:1.7px;padding:12px}
+footer span{color:#a78bfa;padding:0 5px}
+@media(max-width:620px){.page{width:min(100% - 28px,980px);padding-top:19px}.hero{padding:38px 0 27px}.orb-wrap{width:85px;flex-basis:85px}.orb{width:75px;height:75px}.orb-core{width:25px;height:25px}.orb-label{font-size:7px;letter-spacing:1px;text-align:center}.hero h2{letter-spacing:-1.2px}.intro{font-size:12px}.panel{padding:18px}.panel-heading{align-items:flex-start;gap:8px}.people{font-size:9px;padding:7px}.actions{flex-direction:column}.features{grid-template-columns:1fr}.features article{display:grid;grid-template-columns:28px 1fr;column-gap:9px}.feature-icon{grid-row:span 2}.features h4{align-self:end}.features p{align-self:start}}
+@media(max-width:390px){.orb-wrap{display:none}.hero h2{font-size:34px}.status{font-size:8px}}
