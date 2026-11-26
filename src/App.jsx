@@ -19,6 +19,7 @@ export default function App() {
 
     if (error) {
       console.error("Erro ao carregar participantes:", error);
+      setNotice("Não foi possível carregar os participantes.");
       return;
     }
 
@@ -27,6 +28,8 @@ export default function App() {
 
   useEffect(() => {
     if (!activeRoomId) return;
+
+    loadParticipants(activeRoomId);
 
     const channel = supabase
       .channel(`room-${activeRoomId}`)
@@ -78,12 +81,10 @@ export default function App() {
     setNotice("Criando sua sala...");
 
     try {
-      const code = generateRoomCode();
-
       const { data: room, error: roomError } = await supabase
         .from("rooms")
         .insert({
-          code,
+          code: generateRoomCode(),
           host_name: name,
         })
         .select("id, code")
@@ -98,19 +99,17 @@ export default function App() {
           display_name: name,
         });
 
-      if (participantError) {
-        setRoomCode(room.code);
-        throw new Error(
-          `A sala ${room.code} foi criada, mas não foi possível registrar sua entrada: ${participantError.message}`
-        );
-      }
+      if (participantError) throw participantError;
 
       setRoomCode(room.code);
+      setParticipants([]);
       setActiveRoomId(room.id);
       setNotice(`Sala criada! Código: ${room.code}`);
     } catch (error) {
       console.error("Erro ao criar sala:", error);
-      setNotice(error.message || "Não foi possível criar a sala.");
+      setNotice(
+        error.message || "Não foi possível criar a sala."
+      );
     } finally {
       setLoading(false);
     }
@@ -152,12 +151,13 @@ export default function App() {
       if (participantError) throw participantError;
 
       setRoomCode(room.code);
+      setParticipants([]);
       setActiveRoomId(room.id);
       setNotice(`Você entrou na sala ${room.code}!`);
     } catch (error) {
       console.error("Erro ao entrar na sala:", error);
       setNotice(
-        "Não foi possível entrar na sala. Verifique sua conexão e tente novamente."
+        error.message || "Não foi possível entrar na sala."
       );
     } finally {
       setLoading(false);
