@@ -6,9 +6,45 @@
     <meta name="theme-color" content="#101014" />
     <meta name="description" content="Ogro Não, Ciclope — sala coletiva de estudos por voz." />
     <title>Ogro Não, Ciclope</title>
+    <style>
+      html,body{margin:0;min-height:100%;background:#0c0c10;color:#f4f2f7;font-family:system-ui,sans-serif}
+      #startup-check{max-width:680px;margin:12vh auto;padding:24px;width:calc(100% - 48px);box-sizing:border-box;border:1px solid #a78bfa66;border-radius:16px;background:#19171f}
+      #startup-check h1{font-size:22px;margin:0 0 10px}#startup-check p{color:#c8c1d2;line-height:1.6}
+      #startup-check code{color:#d7c8ff;overflow-wrap:anywhere}#startup-check .small{font-size:12px;color:#96909f}
+      #startup-error{display:none;margin-top:14px;padding:12px;border-radius:10px;background:#481d27;color:#ffdce2;white-space:pre-wrap;overflow-wrap:anywhere}
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <section id="startup-check" role="status">
+        <h1>Ogro Não, Ciclope</h1>
+        <p id="startup-message">Diagnóstico: o HTML foi carregado. Aguardando a inicialização do aplicativo…</p>
+        <p class="small">Se esta mensagem permanecer, o aplicativo React não terminou de iniciar.</p>
+        <div id="startup-error"></div>
+      </section>
+    </div>
+    <script>
+      (function () {
+        function showStartupError(label, detail) {
+          var message = document.getElementById("startup-message");
+          var box = document.getElementById("startup-error");
+          if (message) message.textContent = "Diagnóstico: houve uma falha antes de o aplicativo iniciar.";
+          if (box) {
+            box.style.display = "block";
+            box.textContent = label + (detail ? "\n" + detail : "");
+          }
+        }
+        window.addEventListener("error", function (event) {
+          var detail = event.message || (event.target && (event.target.src || event.target.href)) || "Erro de carregamento sem detalhes.";
+          showStartupError("Erro JavaScript/recurso:", String(detail));
+        }, true);
+        window.addEventListener("unhandledrejection", function (event) {
+          var reason = event.reason && (event.reason.stack || event.reason.message) || event.reason || "Promessa rejeitada sem detalhes.";
+          showStartupError("Erro assíncrono:", String(reason));
+        });
+        window.__showStartupError = showStartupError;
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
