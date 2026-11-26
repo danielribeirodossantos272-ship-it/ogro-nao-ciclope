@@ -31,3 +31,10 @@ Se o seletor de arquivos do iPhone não permitir enviar as pastas corretamente, 
 ## Segurança
 
 Nunca coloque chaves secretas de APIs em arquivos React, no navegador ou em repositório público. As chaves deverão ficar em variáveis de ambiente do backend.
+
+
+## Inteligência compartilhada (integração em preparação)
+
+A integração de chat da IA utiliza uma função serverless em `api/ai/messages.js`, o cliente em `src/services/aiClient.js` e o componente `src/components/StudyChat.jsx`. A conversa é armazenada por sala na tabela `public.room_ai_messages`.
+
+Configure `GROQ_API_KEY`, `SUPABASE_SECRET_KEY` e `SUPABASE_URL` (ou reutilize `VITE_SUPABASE_URL`) como variáveis server-side na Vercel. Nunca use prefixo `VITE_` nas chaves secretas. Consulte `AI_SETUP.md` antes de publicar.
