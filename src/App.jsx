@@ -1,33 +1,109 @@
 
 import React, { useState } from "react";
+import { supabase } from "./supabaseClient";
 
 export default function App() {
   const [roomCode, setRoomCode] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function createRoom() {
-    setNotice(
-      "A interface inicial está pronta. A criação real de salas será conectada na próxima etapa."
-    );
+  function generateRoomCode() {
+    const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
+
+    for (let i = 0; i < 8; i++) {
+      code += characters.charAt(
+        Math.floor(Math.random() * characters.length)
+      );
+    }
+
+    return code;
   }
 
-  function joinRoom() {
-    if (!displayName.trim() || !roomCode.trim()) {
+  async function createRoom() {
+    const name = displayName.trim();
+
+    if (!name) {
+      setNotice("Informe seu nome antes de criar uma sala.");
+      return;
+    }
+
+    setLoading(true);
+    setNotice("Criando sua sala...");
+
+    try {
+      const code = generateRoomCode();
+
+      const { data, error } = await supabase
+        .from("rooms")
+        .insert({
+          code,
+          host_name: name,
+        })
+        .select("code")
+        .single();
+
+      if (error) throw error;
+
+      setRoomCode(data.code);
+      setNotice(
+        `Sala criada com sucesso! Compartilhe este código: ${data.code}`
+      );
+    } catch (error) {
+      console.error("Erro ao criar sala:", error);
+      setNotice(
+        "Não foi possível criar a sala. Verifique sua conexão e tente novamente."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function joinRoom() {
+    const name = displayName.trim();
+    const code = roomCode.trim().toUpperCase();
+
+    if (!name || !code) {
       setNotice("Informe seu nome e o código da sala.");
       return;
     }
 
-    setNotice(
-      "A conexão com salas será ativada na próxima etapa. Seus dados ainda não foram enviados."
-    );
+    setLoading(true);
+    setNotice("Verificando sala...");
+
+    try {
+      const { data, error } = await supabase
+        .from("rooms")
+        .select("id, code, host_name")
+        .eq("code", code)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) {
+        setNotice("Sala não encontrada. Confira o código informado.");
+        return;
+      }
+
+      setRoomCode(data.code);
+      setNotice(
+        `Sala ${data.code} encontrada! A conexão dos participantes será implementada na próxima etapa.`
+      );
+    } catch (error) {
+      console.error("Erro ao consultar sala:", error);
+      setNotice(
+        "Não foi possível consultar a sala. Verifique sua conexão e tente novamente."
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <main className="page">
       <header className="topbar">
         <div className="brand-mark">OC</div>
-
         <div>
           <p className="eyebrow">
             ESTÚDIO DE APRENDIZADO COLETIVO
@@ -36,7 +112,6 @@ export default function App() {
             Ogro Não, <span>Ciclope</span>
           </h1>
         </div>
-
         <div className="status">
           <i /> PRÉ-VERSÃO
         </div>
@@ -47,13 +122,11 @@ export default function App() {
           <p className="eyebrow">
             UMA SALA. UMA INTELIGÊNCIA. TODO MUNDO JUNTO.
           </p>
-
           <h2>
             Estudar em grupo,
             <br />
             <span>com uma IA compartilhada.</span>
           </h2>
-
           <p className="intro">
             Entre em uma sala de voz, envie seus materiais e estude
             com seus colegas. A mesma pergunta e a mesma resposta
@@ -75,7 +148,6 @@ export default function App() {
             <p className="eyebrow">COMECE POR AQUI</p>
             <h3>Entrar em uma sala</h3>
           </div>
-
           <div className="people">
             ♧ <b>Até 6 participantes</b>
           </div>
@@ -87,6 +159,7 @@ export default function App() {
           onChange={(e) => setDisplayName(e.target.value)}
           placeholder="Como devemos chamar você?"
           maxLength={32}
+          disabled={loading}
         />
 
         <label>Código da sala</label>
@@ -97,14 +170,24 @@ export default function App() {
           }
           placeholder="Ex.: CICLOPE123"
           maxLength={20}
+          disabled={loading}
         />
 
         <div className="actions">
-          <button className="primary" onClick={joinRoom}>
-            Entrar na sala <span>→</span>
+          <button
+            className="primary"
+            onClick={joinRoom}
+            disabled={loading}
+          >
+            {loading ? "Aguarde..." : "Entrar na sala"}
+            <span>→</span>
           </button>
 
-          <button className="secondary" onClick={createRoom}>
+          <button
+            className="secondary"
+            onClick={createRoom}
+            disabled={loading}
+          >
             Criar nova sala
           </button>
         </div>
@@ -116,8 +199,9 @@ export default function App() {
         )}
 
         <p className="privacy">
-          Esta é a primeira estrutura visual. Nenhum microfone é
-          ativado e nenhum dado é transmitido nesta versão.
+          A criação e a consulta de salas estão conectadas ao banco
+          de dados. Voz compartilhada e comunicação em tempo real
+          ainda serão implementadas.
         </p>
       </section>
 
