@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
 import { Room, RoomEvent, Track, TokenSource } from "livekit-client";
+import StudyChat from "./components/StudyChat.jsx";
 
 // LiveKit Development Token Server (somente para testes)
 const LIVEKIT_TOKEN_SERVER_ID = "ogronociclope-1qyyky";
@@ -22,6 +23,7 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [activeRoomId, setActiveRoomId] = useState(null);
+  const [currentParticipantId, setCurrentParticipantId] = useState(null);
   const [participants, setParticipants] = useState([]);
 
   // Estado do áudio compartilhado
@@ -112,11 +114,14 @@ export default function App() {
         .single();
       if (roomError) throw roomError;
 
-      const { error: participantError } = await supabase
+      const { data: participant, error: participantError } = await supabase
         .from("room_participants")
-        .insert({ room_id: room.id, display_name: name });
+        .insert({ room_id: room.id, display_name: name })
+        .select("id")
+        .single();
       if (participantError) throw participantError;
 
+      setCurrentParticipantId(participant.id);
       setRoomCode(room.code);
       setParticipants([]);
       setActiveRoomId(room.id);
@@ -154,11 +159,14 @@ export default function App() {
         return;
       }
 
-      const { error: participantError } = await supabase
+      const { data: participant, error: participantError } = await supabase
         .from("room_participants")
-        .insert({ room_id: room.id, display_name: name });
+        .insert({ room_id: room.id, display_name: name })
+        .select("id")
+        .single();
       if (participantError) throw participantError;
 
+      setCurrentParticipantId(participant.id);
       setRoomCode(room.code);
       setParticipants([]);
       setActiveRoomId(room.id);
@@ -615,6 +623,8 @@ export default function App() {
                 style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}
               />
             </div>
+
+            <StudyChat roomCode={roomCode} participantId={currentParticipantId} participantName={displayName} />
           </section>
         )}
 
