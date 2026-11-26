@@ -1,14 +1,43 @@
 
-import React, { useEffect, useState } from "react";
+
+import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  TokenSource,
+} from "livekit-client";
+
+// LiveKit Development Token Server
+const LIVEKIT_TOKEN_SERVER_ID = "ogronociclope-1qyyky";
+
+const tokenSource = TokenSource.developmentTokenServer(
+  LIVEKIT_TOKEN_SERVER_ID
+);
 
 export default function App() {
   const [roomCode, setRoomCode] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+
   const [activeRoomId, setActiveRoomId] = useState(null);
   const [participants, setParticipants] = useState([]);
+
+  // LiveKit states
+  const [audioStatus, setAudioStatus] = useState("Desconectado");
+  const [audioConnected, setAudioConnected] = useState(false);
+  const [audioLoading, setAudioLoading] = useState(false);
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [audioParticipants, setAudioParticipants] = useState(0);
+
+  const liveKitRoomRef = useRef(null);
+  const audioContainerRef = useRef(null);
+
+  // ==========================================
+  // SUPABASE - PARTICIPANTES
+  // ==========================================
 
   async function loadParticipants(roomId) {
     const { data, error } = await supabase
@@ -56,6 +85,10 @@ export default function App() {
     };
   }, [activeRoomId]);
 
+  // ==========================================
+  // GERAÇÃO DO CÓDIGO DA SALA
+  // ==========================================
+
   function generateRoomCode() {
     const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code = "";
@@ -68,6 +101,10 @@ export default function App() {
 
     return code;
   }
+
+  // ==========================================
+  // CRIAR SALA
+  // ==========================================
 
   async function createRoom() {
     const name = displayName.trim();
@@ -104,9 +141,11 @@ export default function App() {
       setRoomCode(room.code);
       setParticipants([]);
       setActiveRoomId(room.id);
+
       setNotice(`Sala criada! Código: ${room.code}`);
     } catch (error) {
       console.error("Erro ao criar sala:", error);
+
       setNotice(
         error.message || "Não foi possível criar a sala."
       );
@@ -114,6 +153,10 @@ export default function App() {
       setLoading(false);
     }
   }
+
+  // ==========================================
+  // ENTRAR NA SALA
+  // ==========================================
 
   async function joinRoom() {
     const name = displayName.trim();
@@ -153,9 +196,11 @@ export default function App() {
       setRoomCode(room.code);
       setParticipants([]);
       setActiveRoomId(room.id);
+
       setNotice(`Você entrou na sala ${room.code}!`);
     } catch (error) {
       console.error("Erro ao entrar na sala:", error);
+
       setNotice(
         error.message || "Não foi possível entrar na sala."
       );
@@ -163,6 +208,242 @@ export default function App() {
       setLoading(false);
     }
   }
+
+  // ==========================================
+  // LIVEKIT - CONECTAR ÁUDIO
+  // ==========================================
+
+  async function connectAudio() {
+    if (!activeRoomId || !roomCode) {
+      setNotice("Entre em uma sala antes de conectar o áudio.");
+      return;
+    }
+
+    if (liveKitRoomRef.current) {
+      setNotice("Você já está conectado ao áudio.");
+      return;
+    }
+
+    setAudioLoading(true);
+    setAudioStatus("Conectando...");
+    setNotice("Conectando ao servidor de áudio...");
+
+    const liveRoom = new Room();
+
+    try {
+      // Eventos de áudio remoto
+      liveRoom.on(
+        RoomEvent.TrackSubscribed,
+        (track, publication, participant) => {
+          if (track.kind !== Track.Kind.Audio) return;
+
+          const audioElement = track.attach();
+
+          audioElement.autoplay = true;
+          audioElement.playsInline = true;
+          audioElement.setAttribute("playsinline", "true");
+
+          audioContainerRef.current?.appendChild(audioElement);
+
+          audioElement.play().catch((error) => {
+            console.warn("Reprodução automática bloqueada:", error);
+            setNotice(
+              "Áudio conectado. Toque em Ativar áudio para ouvir os participantes."
+            );
+          });
+        }
+      );
+
+      // Remover áudio quando participante parar de transmitir
+      liveRoom.on(
+        RoomEvent.TrackUnsubscribed,
+        (track) => {
+          track.detach().forEach((element) => element.remove());
+        }
+      );
+
+      // Participante entrou no áudio
+      liveRoom.on(
+        RoomEvent.ParticipantConnected,
+        () => {
+          setAudioParticipants(
+            liveRoom.remoteParticipants.size + 1
+          );
+        }
+      );
+
+      // Participante saiu do áudio
+      liveRoom.on(
+        RoomEvent.ParticipantDisconnected,
+        () => {
+          setAudioParticipants(
+            liveRoom.remoteParticipants.size + 1
+          );
+        }
+      );
+
+      // Desconexão do servidor
+      liveRoom.on(RoomEvent.Disconnected, () => {
+        if (liveKitRoomRef.current === liveRoom) {
+          liveKitRoomRef.current = null;
+        }
+
+        setAudioConnected(false);
+        setAudioStatus("Desconectado");
+        setMicEnabled(false);
+        setAudioParticipants(0);
+
+        if (audioContainerRef.current) {
+          audioContainerRef.current.replaceChildren();
+        }
+      });
+
+      // Solicitar token individual
+      const liveKitRoomName = `ogro-${roomCode.toUpperCase()}`;
+
+      const { serverUrl, participantToken } =
+        await tokenSource.fetch({
+          roomName: liveKitRoomName,
+        });
+
+      if (!serverUrl || !participantToken) {
+        throw new Error("O servidor não retornou as credenciais.");
+      }
+
+      // Conectar ao LiveKit
+      await liveRoom.connect(serverUrl, participantToken);
+
+      liveKitRoomRef.current = liveRoom;
+
+      setAudioConnected(true);
+      setAudioStatus("Conectado");
+
+      setAudioParticipants(
+        liveRoom.remoteParticipants.size + 1
+      );
+
+      // Tentar ativar o microfone
+      try {
+        await liveRoom.localParticipant.setMicrophoneEnabled(true);
+
+        setMicEnabled(true);
+        setNotice("Áudio conectado! Microfone ligado.");
+      } catch (micError) {
+        console.error("Erro ao ativar microfone:", micError);
+
+        setMicEnabled(false);
+        setNotice(
+          "Conectado ao áudio, mas não foi possível ativar o microfone. Verifique as permissões."
+        );
+      }
+    } catch (error) {
+      console.error("Erro ao conectar LiveKit:", error);
+
+      liveRoom.disconnect();
+
+      if (liveKitRoomRef.current === liveRoom) {
+        liveKitRoomRef.current = null;
+      }
+
+      setAudioConnected(false);
+      setAudioStatus("Erro na conexão");
+      setMicEnabled(false);
+      setAudioParticipants(0);
+
+      setNotice(
+        error.message || "Não foi possível conectar ao áudio."
+      );
+    } finally {
+      setAudioLoading(false);
+    }
+  }
+
+  // ==========================================
+  // LIVEKIT - MICROFONE
+  // ==========================================
+
+  async function toggleMicrophone() {
+    const liveRoom = liveKitRoomRef.current;
+
+    if (!liveRoom) return;
+
+    try {
+      const nextState = !micEnabled;
+
+      await liveRoom.localParticipant.setMicrophoneEnabled(
+        nextState
+      );
+
+      setMicEnabled(nextState);
+
+      setNotice(
+        nextState
+          ? "Microfone ligado."
+          : "Microfone desligado."
+      );
+    } catch (error) {
+      console.error("Erro no microfone:", error);
+
+      setNotice("Não foi possível alterar o microfone.");
+    }
+  }
+
+  // ==========================================
+  // LIVEKIT - ATIVAR REPRODUÇÃO
+  // ==========================================
+
+  async function enableRemoteAudio() {
+    if (!audioContainerRef.current) return;
+
+    const elements =
+      audioContainerRef.current.querySelectorAll("audio");
+
+    for (const element of elements) {
+      try {
+        await element.play();
+      } catch (error) {
+        console.warn("Não foi possível reproduzir áudio:", error);
+      }
+    }
+
+    setNotice("Reprodução de áudio ativada.");
+  }
+
+  // ==========================================
+  // LIVEKIT - DESCONECTAR
+  // ==========================================
+
+  function disconnectAudio() {
+    const liveRoom = liveKitRoomRef.current;
+
+    if (liveRoom) {
+      liveKitRoomRef.current = null;
+      liveRoom.disconnect();
+    }
+
+    if (audioContainerRef.current) {
+      audioContainerRef.current.replaceChildren();
+    }
+
+    setAudioConnected(false);
+    setAudioStatus("Desconectado");
+    setMicEnabled(false);
+    setAudioParticipants(0);
+
+    setNotice("Você saiu da conexão de áudio.");
+  }
+
+  // Limpar conexão quando o componente for desmontado
+  useEffect(() => {
+    return () => {
+      liveKitRoomRef.current?.disconnect();
+      liveKitRoomRef.current = null;
+    };
+  }, []);
+
+  // ==========================================
+  // INTERFACE
+  // ==========================================
 
   return (
     <main className="page">
@@ -173,6 +454,7 @@ export default function App() {
           <p className="eyebrow">
             ESTÚDIO DE APRENDIZADO COLETIVO
           </p>
+
           <h1>
             Ogro Não, <span>Ciclope</span>
           </h1>
@@ -206,6 +488,7 @@ export default function App() {
           <div className="orb">
             <div className="orb-core" />
           </div>
+
           <div className="orb-label">SALA DE ESTUDOS</div>
         </div>
       </section>
@@ -218,20 +501,22 @@ export default function App() {
           </div>
 
           <div className="people">
-            ♧ <b>Até 6 participantes</b>
+            ♧ <b>Participantes da sala</b>
           </div>
         </div>
 
         <label>Seu nome</label>
+
         <input
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           placeholder="Como devemos chamar você?"
           maxLength={32}
-          disabled={loading}
+          disabled={loading || !!activeRoomId}
         />
 
         <label>Código da sala</label>
+
         <input
           value={roomCode}
           onChange={(e) =>
@@ -239,27 +524,29 @@ export default function App() {
           }
           placeholder="Ex.: CICLOPE123"
           maxLength={20}
-          disabled={loading}
+          disabled={loading || !!activeRoomId}
         />
 
-        <div className="actions">
-          <button
-            className="primary"
-            onClick={joinRoom}
-            disabled={loading}
-          >
-            {loading ? "Aguarde..." : "Entrar na sala"}
-            <span>→</span>
-          </button>
+        {!activeRoomId && (
+          <div className="actions">
+            <button
+              className="primary"
+              onClick={joinRoom}
+              disabled={loading}
+            >
+              {loading ? "Aguarde..." : "Entrar na sala"}
+              <span>→</span>
+            </button>
 
-          <button
-            className="secondary"
-            onClick={createRoom}
-            disabled={loading}
-          >
-            Criar nova sala
-          </button>
-        </div>
+            <button
+              className="secondary"
+              onClick={createRoom}
+              disabled={loading}
+            >
+              Criar nova sala
+            </button>
+          </div>
+        )}
 
         {notice && (
           <p className="notice" role="status">
@@ -270,6 +557,7 @@ export default function App() {
         {activeRoomId && (
           <section className="participants">
             <h3>Participantes na sala</h3>
+
             <p>Código: {roomCode}</p>
 
             {participants.length === 0 ? (
@@ -287,12 +575,107 @@ export default function App() {
             <p>
               {participants.length} participante(s) registrado(s).
             </p>
+
+            {/* CONTROLES DE ÁUDIO */}
+
+            <div
+              className="audio-panel"
+              style={{
+                marginTop: "22px",
+                padding: "18px",
+                border: "1px solid #a78bfa44",
+                borderRadius: "15px",
+                background: "#a78bfa0b",
+              }}
+            >
+              <p className="eyebrow">LIVEKIT AUDIO</p>
+
+              <h3>Conferência de voz</h3>
+
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: audioConnected ? "#86efac" : "#aaa5b4",
+                  marginTop: "12px",
+                }}
+              >
+                ● {audioStatus}
+              </p>
+
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#aaa5b4",
+                }}
+              >
+                Participantes no áudio: {audioParticipants}
+              </p>
+
+              {!audioConnected ? (
+                <button
+                  className="primary"
+                  style={{ width: "100%", marginTop: "12px" }}
+                  onClick={connectAudio}
+                  disabled={audioLoading}
+                >
+                  {audioLoading
+                    ? "Conectando..."
+                    : "Conectar áudio"}
+                </button>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "10px",
+                    marginTop: "15px",
+                  }}
+                >
+                  <button
+                    className="primary"
+                    onClick={toggleMicrophone}
+                  >
+                    {micEnabled
+                      ? "🎙 Desligar microfone"
+                      : "🎙 Ligar microfone"}
+                  </button>
+
+                  <button
+                    className="secondary"
+                    onClick={enableRemoteAudio}
+                  >
+                    Ativar áudio dos participantes
+                  </button>
+
+                  <button
+                    className="secondary"
+                    onClick={disconnectAudio}
+                  >
+                    Desconectar áudio
+                  </button>
+                </div>
+              )}
+
+              {/* Áudios recebidos do LiveKit */}
+
+              <div
+                ref={audioContainerRef}
+                aria-label="Áudios dos participantes"
+                style={{
+                  position: "absolute",
+                  width: "1px",
+                  height: "1px",
+                  overflow: "hidden",
+                  clipPath: "inset(50%)",
+                }}
+              />
+            </div>
           </section>
         )}
 
         <p className="privacy">
           Salas e participantes conectados ao banco de dados.
-          A comunicação por voz ainda será implementada.
+          Comunicação por voz integrada ao LiveKit.
         </p>
       </section>
 
