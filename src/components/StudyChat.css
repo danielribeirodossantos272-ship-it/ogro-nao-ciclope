@@ -1,0 +1,23 @@
+.study-chat{margin-top:22px;padding:18px;border:1px solid #a78bfa44;border-radius:15px;background:linear-gradient(145deg,#a78bfa0b,#ffffff03);color:#f4f2f7}
+.study-chat-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:15px}
+.study-chat-heading h3{font:600 20px 'Space Grotesk';margin:0}
+.study-chat-live{font-size:9px;letter-spacing:1px;color:#c4b5fd;border:1px solid #a78bfa55;padding:7px 9px;border-radius:20px;white-space:nowrap}
+.study-chat-messages{display:flex;flex-direction:column;gap:11px;max-height:380px;overflow:auto;padding:3px 2px 12px;scroll-behavior:smooth}
+.study-chat-empty,.study-chat-thinking{color:#aaa5b4;font-size:12px;line-height:1.6;padding:12px;background:#ffffff06;border-radius:10px}
+.study-message{padding:12px;border-radius:12px;max-width:94%;border:1px solid #ffffff12;background:#ffffff07}
+.study-message.participant{align-self:flex-end;background:#a78bfa13;border-color:#a78bfa30}
+.study-message.assistant{align-self:stretch;background:#171420;border-color:#a78bfa44}
+.study-message-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:7px;color:#c4b5fd;font-size:10px}
+.study-message-meta time{color:#817b8c;font-weight:400}
+.study-message p{white-space:pre-wrap;overflow-wrap:anywhere;color:#e9e4ef;font-size:13px;line-height:1.65;margin:0}
+.study-chat-form{border-top:1px solid #ffffff16;padding-top:13px}
+.study-chat-form textarea{display:block;width:100%;resize:vertical;min-height:76px;background:#0d0c11;border:1px solid #ffffff20;border-radius:11px;padding:12px;color:#fff;font:12px/1.5 'DM Sans',sans-serif;outline:none}
+.study-chat-form textarea:focus{border-color:#a78bfa}
+.study-chat-form textarea::placeholder{color:#716b79}
+.study-chat-form-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:9px}
+.study-chat-form-footer span{font-size:10px;color:#77717f}
+.study-chat-form-footer button{flex:0 0 auto}
+.study-chat-form-footer button:disabled{opacity:.45;cursor:not-allowed}
+.study-chat-error{padding:10px;border-radius:9px;background:#7f1d1d30;border:1px solid #f8717144;color:#fecaca;font-size:12px;line-height:1.5}
+.study-chat-footnote{font-size:10px;color:#77717f;margin:10px 0 0}
+@media(max-width:620px){.study-chat{padding:14px}.study-chat-heading h3{font-size:18px}.study-message{max-width:100%}.study-chat-form-footer button{font-size:11px;padding:12px}}
