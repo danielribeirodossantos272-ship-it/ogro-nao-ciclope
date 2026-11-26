@@ -1,5 +1,4 @@
 
-
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
 import {
@@ -25,12 +24,13 @@ export default function App() {
   const [activeRoomId, setActiveRoomId] = useState(null);
   const [participants, setParticipants] = useState([]);
 
-  // LiveKit states
+  // LiveKit
   const [audioStatus, setAudioStatus] = useState("Desconectado");
   const [audioConnected, setAudioConnected] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
   const [micEnabled, setMicEnabled] = useState(false);
   const [audioParticipants, setAudioParticipants] = useState(0);
+  const [micPublished, setMicPublished] = useState(false);
 
   const liveKitRoomRef = useRef(null);
   const audioContainerRef = useRef(null);
@@ -145,7 +145,6 @@ export default function App() {
       setNotice(`Sala criada! Código: ${room.code}`);
     } catch (error) {
       console.error("Erro ao criar sala:", error);
-
       setNotice(
         error.message || "Não foi possível criar a sala."
       );
@@ -200,13 +199,22 @@ export default function App() {
       setNotice(`Você entrou na sala ${room.code}!`);
     } catch (error) {
       console.error("Erro ao entrar na sala:", error);
-
       setNotice(
         error.message || "Não foi possível entrar na sala."
       );
     } finally {
       setLoading(false);
     }
+  }
+
+  // ==========================================
+  // ATUALIZAR CONTAGEM DE ÁUDIO
+  // ==========================================
+
+  function updateAudioParticipants(liveRoom) {
+    setAudioParticipants(
+      liveRoom.remoteParticipants.size + 1
+    );
   }
 
   // ==========================================
@@ -231,58 +239,77 @@ export default function App() {
     const liveRoom = new Room();
 
     try {
-      // Eventos de áudio remoto
+      // Receber áudio de outros participantes
       liveRoom.on(
         RoomEvent.TrackSubscribed,
-        (track, publication, participant) => {
+        async (track, publication, participant) => {
+          console.log(
+            "Faixa recebida:",
+            track.kind,
+            participant.identity
+          );
+
           if (track.kind !== Track.Kind.Audio) return;
 
           const audioElement = track.attach();
 
           audioElement.autoplay = true;
           audioElement.playsInline = true;
+          audioElement.muted = false;
+          audioElement.volume = 1;
+
           audioElement.setAttribute("playsinline", "true");
 
           audioContainerRef.current?.appendChild(audioElement);
 
-          audioElement.play().catch((error) => {
-            console.warn("Reprodução automática bloqueada:", error);
-            setNotice(
-              "Áudio conectado. Toque em Ativar áudio para ouvir os participantes."
+          try {
+            await audioElement.play();
+            console.log(
+              "Áudio reproduzido:",
+              participant.identity
             );
+          } catch (error) {
+            console.warn(
+              "Reprodução automática bloqueada:",
+              error
+            );
+
+            setNotice(
+              "Áudio recebido. Toque em Ativar áudio dos participantes."
+            );
+          }
+
+          updateAudioParticipants(liveRoom);
+        }
+      );
+
+      // Remover áudio quando a faixa for cancelada
+      liveRoom.on(
+        RoomEvent.TrackUnsubscribed,
+        (track) => {
+          track.detach().forEach((element) => {
+            element.remove();
           });
         }
       );
 
-      // Remover áudio quando participante parar de transmitir
-      liveRoom.on(
-        RoomEvent.TrackUnsubscribed,
-        (track) => {
-          track.detach().forEach((element) => element.remove());
-        }
-      );
-
-      // Participante entrou no áudio
+      // Participante entrou no LiveKit
       liveRoom.on(
         RoomEvent.ParticipantConnected,
         () => {
-          setAudioParticipants(
-            liveRoom.remoteParticipants.size + 1
-          );
+          updateAudioParticipants(liveRoom);
         }
       );
 
-      // Participante saiu do áudio
+      // Participante saiu do LiveKit
       liveRoom.on(
         RoomEvent.ParticipantDisconnected,
         () => {
-          setAudioParticipants(
-            liveRoom.remoteParticipants.size + 1
-          );
+          updateAudioParticipants(liveRoom);
         }
       );
 
-      // Desconexão do servidor
+      // Conexão encerrada
       liveRoom.on(RoomEvent.Disconnected, () => {
         if (liveKitRoomRef.current === liveRoom) {
           liveKitRoomRef.current = null;
@@ -291,6 +318,7 @@ export default function App() {
         setAudioConnected(false);
         setAudioStatus("Desconectado");
         setMicEnabled(false);
+        setMicPublished(false);
         setAudioParticipants(0);
 
         if (audioContainerRef.current) {
@@ -298,42 +326,80 @@ export default function App() {
         }
       });
 
-      // Solicitar token individual
-      const liveKitRoomName = `ogro-${roomCode.toUpperCase()}`;
+      // Nome único da sala de voz para o código compartilhado
+      const liveKitRoomName =
+        `ogro-${roomCode.toUpperCase()}`;
 
+      // Solicitar credenciais
       const { serverUrl, participantToken } =
         await tokenSource.fetch({
           roomName: liveKitRoomName,
         });
 
       if (!serverUrl || !participantToken) {
-        throw new Error("O servidor não retornou as credenciais.");
+        throw new Error(
+          "O servidor não retornou as credenciais do áudio."
+        );
       }
 
       // Conectar ao LiveKit
-      await liveRoom.connect(serverUrl, participantToken);
+      await liveRoom.connect(
+        serverUrl,
+        participantToken
+      );
 
       liveKitRoomRef.current = liveRoom;
 
       setAudioConnected(true);
       setAudioStatus("Conectado");
 
-      setAudioParticipants(
-        liveRoom.remoteParticipants.size + 1
+      updateAudioParticipants(liveRoom);
+
+      console.log(
+        "Conectado ao LiveKit:",
+        liveKitRoomName
       );
 
-      // Tentar ativar o microfone
+      // Publicar o microfone
       try {
-        await liveRoom.localParticipant.setMicrophoneEnabled(true);
+        await liveRoom.localParticipant.setMicrophoneEnabled(
+          true
+        );
+
+        const micPublication =
+          liveRoom.localParticipant.getTrackPublication(
+            Track.Source.Microphone
+          );
+
+        if (!micPublication) {
+          throw new Error(
+            "O microfone foi habilitado, mas a faixa não foi publicada."
+          );
+        }
 
         setMicEnabled(true);
-        setNotice("Áudio conectado! Microfone ligado.");
+        setMicPublished(true);
+
+        console.log(
+          "Microfone publicado:",
+          micPublication
+        );
+
+        setNotice(
+          "Áudio conectado! Microfone publicado com sucesso."
+        );
       } catch (micError) {
-        console.error("Erro ao ativar microfone:", micError);
+        console.error(
+          "Erro ao publicar microfone:",
+          micError
+        );
 
         setMicEnabled(false);
+        setMicPublished(false);
+
         setNotice(
-          "Conectado ao áudio, mas não foi possível ativar o microfone. Verifique as permissões."
+          "Conectado, mas houve um erro ao publicar o microfone: " +
+            micError.message
         );
       }
     } catch (error) {
@@ -348,6 +414,7 @@ export default function App() {
       setAudioConnected(false);
       setAudioStatus("Erro na conexão");
       setMicEnabled(false);
+      setMicPublished(false);
       setAudioParticipants(0);
 
       setNotice(
@@ -374,17 +441,33 @@ export default function App() {
         nextState
       );
 
+      const micPublication =
+        liveRoom.localParticipant.getTrackPublication(
+          Track.Source.Microphone
+        );
+
       setMicEnabled(nextState);
+      setMicPublished(nextState && !!micPublication);
+
+      if (nextState && !micPublication) {
+        setNotice(
+          "Microfone ligado, mas não encontramos uma faixa publicada."
+        );
+        return;
+      }
 
       setNotice(
         nextState
-          ? "Microfone ligado."
+          ? "Microfone ligado e publicado."
           : "Microfone desligado."
       );
     } catch (error) {
       console.error("Erro no microfone:", error);
 
-      setNotice("Não foi possível alterar o microfone.");
+      setNotice(
+        "Não foi possível alterar o microfone: " +
+          error.message
+      );
     }
   }
 
@@ -393,20 +476,43 @@ export default function App() {
   // ==========================================
 
   async function enableRemoteAudio() {
-    if (!audioContainerRef.current) return;
+    const liveRoom = liveKitRoomRef.current;
 
-    const elements =
-      audioContainerRef.current.querySelectorAll("audio");
-
-    for (const element of elements) {
-      try {
-        await element.play();
-      } catch (error) {
-        console.warn("Não foi possível reproduzir áudio:", error);
-      }
+    if (!liveRoom) {
+      setNotice("Conecte-se ao áudio primeiro.");
+      return;
     }
 
-    setNotice("Reprodução de áudio ativada.");
+    try {
+      // Importante para liberar áudio no Safari/iPhone
+      await liveRoom.startAudio();
+
+      if (audioContainerRef.current) {
+        const elements =
+          audioContainerRef.current.querySelectorAll("audio");
+
+        for (const element of elements) {
+          element.autoplay = true;
+          element.playsInline = true;
+          element.muted = false;
+          element.volume = 1;
+
+          await element.play();
+        }
+      }
+
+      setNotice("Reprodução de áudio ativada.");
+    } catch (error) {
+      console.error(
+        "Erro ao liberar reprodução:",
+        error
+      );
+
+      setNotice(
+        "Não foi possível liberar o áudio: " +
+          error.message
+      );
+    }
   }
 
   // ==========================================
@@ -428,12 +534,16 @@ export default function App() {
     setAudioConnected(false);
     setAudioStatus("Desconectado");
     setMicEnabled(false);
+    setMicPublished(false);
     setAudioParticipants(0);
 
     setNotice("Você saiu da conexão de áudio.");
   }
 
-  // Limpar conexão quando o componente for desmontado
+  // ==========================================
+  // LIMPEZA AO SAIR DA PÁGINA
+  // ==========================================
+
   useEffect(() => {
     return () => {
       liveKitRoomRef.current?.disconnect();
@@ -489,7 +599,9 @@ export default function App() {
             <div className="orb-core" />
           </div>
 
-          <div className="orb-label">SALA DE ESTUDOS</div>
+          <div className="orb-label">
+            SALA DE ESTUDOS
+          </div>
         </div>
       </section>
 
@@ -576,8 +688,6 @@ export default function App() {
               {participants.length} participante(s) registrado(s).
             </p>
 
-            {/* CONTROLES DE ÁUDIO */}
-
             <div
               className="audio-panel"
               style={{
@@ -595,7 +705,9 @@ export default function App() {
               <p
                 style={{
                   fontSize: "12px",
-                  color: audioConnected ? "#86efac" : "#aaa5b4",
+                  color: audioConnected
+                    ? "#86efac"
+                    : "#aaa5b4",
                   marginTop: "12px",
                 }}
               >
@@ -611,10 +723,32 @@ export default function App() {
                 Participantes no áudio: {audioParticipants}
               </p>
 
+              {audioConnected && (
+                <>
+                  <p
+                    style={{
+                      fontSize: "12px",
+                      color: micPublished
+                        ? "#86efac"
+                        : "#fbbf24",
+                    }}
+                  >
+                    Microfone:{" "}
+                    {micEnabled ? "Ligado" : "Desligado"}
+                    {" | "}
+                    Publicação:{" "}
+                    {micPublished ? "Confirmada" : "Não confirmada"}
+                  </p>
+                </>
+              )}
+
               {!audioConnected ? (
                 <button
                   className="primary"
-                  style={{ width: "100%", marginTop: "12px" }}
+                  style={{
+                    width: "100%",
+                    marginTop: "12px",
+                  }}
                   onClick={connectAudio}
                   disabled={audioLoading}
                 >
@@ -655,8 +789,6 @@ export default function App() {
                   </button>
                 </div>
               )}
-
-              {/* Áudios recebidos do LiveKit */}
 
               <div
                 ref={audioContainerRef}
