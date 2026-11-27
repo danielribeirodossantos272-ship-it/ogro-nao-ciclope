@@ -8,15 +8,6 @@ import { createVoiceCommands } from "./services/voiceCommands";
 const LIVEKIT_TOKEN_SERVER_ID = "ogronociclope-1qyyky";
 const tokenSource = TokenSource.developmentTokenServer(LIVEKIT_TOKEN_SERVER_ID);
 
-function normalizeCommand(value = "") {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 export default function App() {
   const [roomCode, setRoomCode] = useState("");
@@ -234,7 +225,7 @@ export default function App() {
   }
 
   // ==========================================
-  // COMANDOS DE VOZ: ABRE / CANCELAR / CONFIRMAR
+  // COMANDOS DE VOZ: ABRE / AGORA / CANCELAR
   // ==========================================
   function stopVoiceCommands() {
     voiceControllerRef.current?.cancel();
@@ -278,7 +269,7 @@ export default function App() {
       recognitionEnabledRef.current = true;
       setVoiceCommandSupported(true);
       setVoiceCommandStatus("Ouvindo o comando ABRE");
-      setNotice('Comandos ativos. Diga "ABRE" para abrir o canal de voz.');
+      setNotice('Comandos ativos: diga ABRE, faça sua pergunta, diga AGORA para enviar ou CANCELAR para interromper.');
 
       recognition.onresult = (event) => {
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -371,6 +362,10 @@ export default function App() {
       liveRoom.on(RoomEvent.Disconnected, () => {
         voiceControllerRef.current?.dispose();
         voiceControllerRef.current = null;
+        recognitionEnabledRef.current = false;
+        try { recognitionRef.current?.stop(); } catch { /* Reconhecimento já encerrado. */ }
+        recognitionRef.current = null;
+        setVoiceCommandStatus("Desativado");
         if (liveKitRoomRef.current === liveRoom) liveKitRoomRef.current = null;
         channelOpenRef.current = false;
         setAudioConnected(false);
@@ -410,7 +405,7 @@ export default function App() {
       channelOpenRef.current = false;
       setMicEnabled(false);
       setMicPublished(false);
-      setNotice('Áudio conectado com o microfone fechado. Ative os comandos e diga "ABRE".');
+      setNotice('Áudio conectado. Ative os comandos, diga ABRE, faça sua pergunta e diga AGORA para enviar.');
     } catch (error) {
       console.error("Erro ao conectar LiveKit:", error);
       liveRoom.disconnect();
@@ -436,7 +431,17 @@ export default function App() {
       return;
     }
     try {
+      // Desbloqueia o AudioContext no gesto do usuário. Ele será usado para
+      // publicar a voz sintetizada do Ciclope como uma faixa LiveKit.
+      const voiceAudioUnlock = voiceControllerRef.current?.unlockAudio();
       await liveRoom.startAudio();
+      if (voiceAudioUnlock) {
+        try {
+          await voiceAudioUnlock;
+        } catch (unlockError) {
+          console.warn("Não foi possível preparar o áudio de voz do Ciclope:", unlockError);
+        }
+      }
       const elements = audioContainerRef.current?.querySelectorAll("audio") || [];
       for (const element of elements) {
         element.autoplay = true;
@@ -587,11 +592,11 @@ export default function App() {
                   <button className="primary" onClick={enableRemoteAudio}>Ativar áudio dos participantes</button>
 
                   <button className="secondary" onClick={startVoiceCommands} disabled={recognitionEnabledRef.current}>
-                    Ativar comandos de voz (diga ABRE)
+                    Ativar comandos de voz (ABRE / AGORA / CANCELAR)
                   </button>
 
                   {micEnabled ? (
-                    <button className="primary" onClick={() => { voiceControllerRef.current?.cancel(); closeVoiceChannel("Canal fechado manualmente."); }}>Fechar canal de voz</button>
+                    <button className="primary" onClick={() => voiceControllerRef.current?.cancel()}>Fechar canal de voz</button>
                   ) : (
                     <button className="secondary" onClick={() => openVoiceChannel("botão")}>Abrir canal de voz manualmente</button>
                   )}
@@ -626,7 +631,7 @@ export default function App() {
       <section className="features">
         <article><div className="feature-icon">◉</div><h4>Voz compartilhada</h4><p>Todos acompanham a mesma conversa com a IA.</p></article>
         <article><div className="feature-icon">▤</div><h4>Materiais de estudo</h4><p>Apostilas, PDFs, imagens e exercícios em um só lugar.</p></article>
-        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE, PERGUNTA, REPITA, ERRO, CONFIRMAR e CANCELAR controlam a interação.</p></article>
+        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE inicia a pergunta, AGORA envia para o Ciclope e CANCELAR interrompe.</p></article>
       </section>
 
       <footer>OGRO NÃO, CICLOPE <span>•</span> CONSTRUINDO JUNTOS</footer>
