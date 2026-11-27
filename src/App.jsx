@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
 import { Room, RoomEvent, Track, TokenSource } from "livekit-client";
 import StudyChat from "./components/StudyChat.jsx";
+import { createVoiceCommands } from "./services/voiceCommands";
 
 // LiveKit Development Token Server (somente para testes)
 const LIVEKIT_TOKEN_SERVER_ID = "ogronociclope-1qyyky";
@@ -41,6 +42,7 @@ export default function App() {
   const recognitionRef = useRef(null);
   const recognitionEnabledRef = useRef(false);
   const channelOpenRef = useRef(false);
+  const voiceControllerRef = useRef(null);
 
   // ==========================================
   // SUPABASE - PARTICIPANTES
@@ -235,6 +237,7 @@ export default function App() {
   // COMANDOS DE VOZ: ABRE / CANCELAR / CONFIRMAR
   // ==========================================
   function stopVoiceCommands() {
+    voiceControllerRef.current?.cancel();
     recognitionEnabledRef.current = false;
     if (recognitionRef.current) {
       try {
@@ -280,37 +283,7 @@ export default function App() {
       recognition.onresult = (event) => {
         for (let i = event.resultIndex; i < event.results.length; i++) {
           if (!event.results[i].isFinal) continue;
-          const transcript = normalizeCommand(event.results[i][0].transcript);
-          console.log("Comando reconhecido:", transcript);
-
-          if (transcript === "abre" || transcript.startsWith("abre ") || transcript.includes(" abre ")) {
-            openVoiceChannel("comando");
-            setVoiceCommandStatus("Canal aberto");
-          } else if (
-            transcript === "cancelar" ||
-            transcript.includes(" cancelar ") ||
-            transcript.endsWith(" cancelar")
-          ) {
-            closeVoiceChannel("Comando CANCELAR reconhecido. Canal fechado.");
-            setVoiceCommandStatus("Ouvindo o comando ABRE");
-          } else if (
-            transcript === "confirmar" ||
-            transcript.includes(" confirmar ") ||
-            transcript.endsWith(" confirmar")
-          ) {
-            closeVoiceChannel("Comando CONFIRMAR reconhecido. Canal fechado.");
-            setVoiceCommandStatus("Ouvindo o comando ABRE");
-          } else if (
-            transcript === "repita" ||
-            transcript === "repete" ||
-            transcript.includes(" repita ") ||
-            transcript.includes(" repete ")
-          ) {
-            setNotice("Comando REPITA reconhecido. A integração com a IA será adicionada na próxima etapa.");
-          } else if (transcript === "erro" || transcript.includes(" erro ")) {
-            closeVoiceChannel("Comando ERRO reconhecido. Canal fechado; refaça sua pergunta.");
-            setVoiceCommandStatus("Ouvindo o comando ABRE");
-          }
+          voiceControllerRef.current?.handle(event.results[i][0].transcript);
         }
       };
 
@@ -396,6 +369,8 @@ export default function App() {
       liveRoom.on(RoomEvent.ParticipantConnected, () => updateAudioParticipants(liveRoom));
       liveRoom.on(RoomEvent.ParticipantDisconnected, () => updateAudioParticipants(liveRoom));
       liveRoom.on(RoomEvent.Disconnected, () => {
+        voiceControllerRef.current?.dispose();
+        voiceControllerRef.current = null;
         if (liveKitRoomRef.current === liveRoom) liveKitRoomRef.current = null;
         channelOpenRef.current = false;
         setAudioConnected(false);
@@ -414,6 +389,17 @@ export default function App() {
 
       await liveRoom.connect(serverUrl, participantToken);
       liveKitRoomRef.current = liveRoom;
+      voiceControllerRef.current?.dispose();
+      voiceControllerRef.current = createVoiceCommands({
+        room: liveRoom,
+        roomCode,
+        participantId: currentParticipantId,
+        isOpen: () => channelOpenRef.current,
+        open: openVoiceChannel,
+        close: closeVoiceChannel,
+        notice: setNotice,
+        status: setVoiceCommandStatus,
+      });
       setAudioConnected(true);
       setAudioStatus("Conectado");
       updateAudioParticipants(liveRoom);
@@ -467,6 +453,8 @@ export default function App() {
   }
 
   async function disconnectAudio() {
+    voiceControllerRef.current?.dispose();
+    voiceControllerRef.current = null;
     stopVoiceCommands();
     await closeVoiceChannel("Canal de voz fechado.");
     const liveRoom = liveKitRoomRef.current;
@@ -484,6 +472,8 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      voiceControllerRef.current?.dispose();
+      voiceControllerRef.current = null;
       recognitionEnabledRef.current = false;
       try { recognitionRef.current?.stop(); } catch (error) { /* já encerrado */ }
       liveKitRoomRef.current?.disconnect();
@@ -601,7 +591,7 @@ export default function App() {
                   </button>
 
                   {micEnabled ? (
-                    <button className="primary" onClick={() => closeVoiceChannel("Canal fechado manualmente.")}>Fechar canal de voz</button>
+                    <button className="primary" onClick={() => { voiceControllerRef.current?.cancel(); closeVoiceChannel("Canal fechado manualmente."); }}>Fechar canal de voz</button>
                   ) : (
                     <button className="secondary" onClick={() => openVoiceChannel("botão")}>Abrir canal de voz manualmente</button>
                   )}
@@ -636,7 +626,7 @@ export default function App() {
       <section className="features">
         <article><div className="feature-icon">◉</div><h4>Voz compartilhada</h4><p>Todos acompanham a mesma conversa com a IA.</p></article>
         <article><div className="feature-icon">▤</div><h4>Materiais de estudo</h4><p>Apostilas, PDFs, imagens e exercícios em um só lugar.</p></article>
-        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE, REPETE, ERRO, CONFIRMAR e CANCELAR controlam a interação.</p></article>
+        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE, PERGUNTA, REPITA, ERRO, CONFIRMAR e CANCELAR controlam a interação.</p></article>
       </section>
 
       <footer>OGRO NÃO, CICLOPE <span>•</span> CONSTRUINDO JUNTOS</footer>
