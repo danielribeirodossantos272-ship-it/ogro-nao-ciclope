@@ -33,6 +33,7 @@ export default function App() {
   const voiceControllerRef = useRef(null);
   const recognitionPausedRef = useRef(false);
   const recognitionRestartTimerRef = useRef(null);
+  const recognitionRetryDelayRef = useRef(650);
 
   // ==========================================
   // SUPABASE - PARTICIPANTES
@@ -189,7 +190,7 @@ export default function App() {
     try { recognitionRef.current?.stop(); } catch { /* Já estava parado. */ }
   }
 
-  function scheduleSpeechRecognitionRestart(recognition = recognitionRef.current) {
+  function scheduleSpeechRecognitionRestart(recognition = recognitionRef.current, delayMs = recognitionRetryDelayRef.current) {
     if (!recognition || !recognitionEnabledRef.current || recognitionPausedRef.current) return;
     if (recognitionRestartTimerRef.current) window.clearTimeout(recognitionRestartTimerRef.current);
     recognitionRestartTimerRef.current = window.setTimeout(() => {
@@ -199,7 +200,7 @@ export default function App() {
         // InvalidStateError significa que o reconhecimento ainda está ativo.
         if (error?.name !== "InvalidStateError") console.warn("Não foi possível reiniciar o reconhecimento:", error);
       }
-    }, 350);
+    }, delayMs);
   }
 
   function resumeSpeechRecognition() {
@@ -208,7 +209,7 @@ export default function App() {
   }
 
   // ==========================================
-  // COMANDOS DE VOZ: ABRE / CANCELAR
+  // COMANDOS DE VOZ: ABRE / AGORA
   // ==========================================
   function stopVoiceCommands() {
     recognitionEnabledRef.current = false;
@@ -230,6 +231,13 @@ export default function App() {
   function startVoiceCommands() {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!window.isSecureContext && window.location.hostname !== "localhost") {
+      setVoiceCommandSupported(false);
+      setVoiceCommandStatus("Conexão segura necessária");
+      setNotice("O reconhecimento de voz exige HTTPS. Abra o Ciclope pelo endereço seguro do site.");
+      return;
+    }
 
     if (!SpeechRecognition) {
       setVoiceCommandSupported(false);
@@ -256,7 +264,12 @@ export default function App() {
       recognitionEnabledRef.current = true;
       setVoiceCommandSupported(true);
       setVoiceCommandStatus("Ouvindo o comando ABRE");
-      setNotice('Comandos ativos. Diga ABRE, faça sua pergunta e pare de falar; o envio será automático após 2,8 segundos de silêncio. Diga CANCELAR para descartar.');
+      setNotice('Comandos ativos. Diga ABRE, faça sua pergunta e diga AGORA para enviar à IA.');
+
+      recognition.onstart = () => {
+        recognitionRetryDelayRef.current = 650;
+        setVoiceCommandStatus("Reconhecimento de voz ativo");
+      };
 
       recognition.onresult = (event) => {
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -271,6 +284,20 @@ export default function App() {
           recognitionEnabledRef.current = false;
           setVoiceCommandStatus("Permissão de reconhecimento negada");
           setNotice("Permita o reconhecimento de voz nas configurações do navegador.");
+        } else if (event.error === "network") {
+          recognitionRetryDelayRef.current = 1500;
+          setVoiceCommandStatus("Reconectando reconhecimento de voz");
+          setNotice("O serviço de reconhecimento de voz do Chrome perdeu a conexão. Verifique a internet e aguarde a reconexão.");
+        } else if (event.error === "no-speech") {
+          recognitionRetryDelayRef.current = 800;
+        } else if (event.error === "audio-capture") {
+          recognitionEnabledRef.current = false;
+          setVoiceCommandStatus("Microfone indisponível para reconhecimento");
+          setNotice("O Chrome não conseguiu acessar o microfone para reconhecer sua pergunta. Confira a permissão do microfone nas configurações do site.");
+        } else if (event.error === "language-not-supported") {
+          recognitionEnabledRef.current = false;
+          setVoiceCommandStatus("Idioma pt-BR indisponível");
+          setNotice("O serviço de voz deste aparelho não oferece reconhecimento em português do Brasil.");
         } else if (event.error !== "no-speech" && event.error !== "aborted") {
           setNotice("O reconhecimento de voz apresentou um erro: " + event.error);
         }
@@ -279,7 +306,7 @@ export default function App() {
       recognition.onend = () => {
         if (recognitionEnabledRef.current && !recognitionPausedRef.current) {
           // Chrome Android e Safari iOS podem encerrar a sessão após uma pausa.
-          scheduleSpeechRecognitionRestart(recognition);
+          scheduleSpeechRecognitionRestart(recognition, recognitionRetryDelayRef.current);
         } else if (!recognitionEnabledRef.current) {
           setVoiceCommandStatus("Desativado");
         }
@@ -385,7 +412,7 @@ export default function App() {
       // O microfone de publicação LiveKit fica fechado durante a captura da pergunta.
       // SpeechRecognition usa a captura do navegador; isso evita conflito no Android.
       await liveRoom.localParticipant.setMicrophoneEnabled(false);
-      setNotice('Áudio conectado. Ative os comandos, diga ABRE e faça sua pergunta. O envio acontece automaticamente após o silêncio.');
+      setNotice('Áudio conectado. Ative os comandos, diga ABRE, faça sua pergunta e diga AGORA para enviar à IA.');
     } catch (error) {
       console.error("Erro ao conectar LiveKit:", error);
       liveRoom.disconnect();
@@ -547,7 +574,7 @@ export default function App() {
                     Comandos de voz: {voiceCommandStatus}
                   </p>
                   <p style={{ fontSize: 12, color: "#aaa5b4" }}>
-                    A fala é transcrita pelo navegador. O Ciclope repete a pergunta e fala a resposta para todos; o microfone LiveKit fica fechado durante a captura.
+                    Diga ABRE para iniciar, faça sua pergunta e diga AGORA para enviar à IA. O áudio da sala continua no LiveKit.
                   </p>
                 </>
               )}
@@ -561,11 +588,11 @@ export default function App() {
                   <button className="primary" onClick={enableRemoteAudio}>Ativar áudio do Ciclope e da sala</button>
 
                   <button className="secondary" onClick={startVoiceCommands} disabled={recognitionEnabledRef.current}>
-                    Ativar comandos de voz (ABRE / CANCELAR)
+                    Ativar comandos de voz (ABRE / AGORA)
                   </button>
 
                   <button className="secondary" onClick={() => voiceControllerRef.current?.cancel()}>
-                    Cancelar interação / parar resposta
+                    Encerrar interação / parar resposta
                   </button>
 
                   <button className="secondary" onClick={stopVoiceCommands}>Desativar comandos de voz</button>
@@ -598,7 +625,7 @@ export default function App() {
       <section className="features">
         <article><div className="feature-icon">◉</div><h4>Voz compartilhada</h4><p>Todos acompanham a mesma conversa com a IA.</p></article>
         <article><div className="feature-icon">▤</div><h4>Materiais de estudo</h4><p>Apostilas, PDFs, imagens e exercícios em um só lugar.</p></article>
-        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE inicia a pergunta, o silêncio envia automaticamente e CANCELAR interrompe.</p></article>
+        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE inicia a pergunta e AGORA envia a pergunta à IA.</p></article>
       </section>
 
       <footer>OGRO NÃO, CICLOPE <span>•</span> CONSTRUINDO JUNTOS</footer>
