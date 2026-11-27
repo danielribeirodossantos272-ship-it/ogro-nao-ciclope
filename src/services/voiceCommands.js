@@ -3,7 +3,6 @@ import { getRoomMessages, sendRoomQuestion } from "./aiClient.js";
 
 const CONTROL_TOPIC = "ciclope-room-control-v4";
 const MAX_QUESTION_LENGTH = 4000;
-const SILENCE_TO_SEND_MS = 2800;
 const SPEECH_CHUNK_LENGTH = 420;
 
 function normalize(value = "") {
@@ -88,7 +87,6 @@ export function createVoiceCommands({
   let turnVersion = 0;
   let speechVersion = 0;
   let requestAbort = null;
-  let silenceTimer = null;
   let commandQueue = Promise.resolve();
   const processedSpeechIds = new Set();
   const localIdentity = room.localParticipant.identity;
@@ -104,13 +102,6 @@ export function createVoiceCommands({
 
   function reportError(error) {
     if (!disposed) notice(error?.message || String(error));
-  }
-
-  function clearSilenceTimer() {
-    if (silenceTimer !== null) {
-      window.clearTimeout(silenceTimer);
-      silenceTimer = null;
-    }
   }
 
   function resetRoomTurn(turnId) {
@@ -232,12 +223,12 @@ export function createVoiceCommands({
     lastFragment = "";
     requestAbort = null;
     mode = "idle";
+    resumeRecognition();
     status("Ouvindo o comando ABRE");
     if (message) notice(message);
   }
 
   async function cancelActiveTurn(message = "Interação cancelada.", notifyRoom = true) {
-    clearSilenceTimer();
     const turnId = activeTurnId;
     const wasOwner = activeOwner === localIdentity;
     const isRemoteTurn = roomBusy && activeOwner && activeOwner !== localIdentity;
@@ -301,12 +292,11 @@ export function createVoiceCommands({
     mode = "listening";
     questionParts = [];
     lastFragment = "";
-    clearSilenceTimer();
 
     try {
       await publishControl({ type: "turn-start", turnId, owner: localIdentity });
       status("Pode fazer sua pergunta");
-      notice("ABRE reconhecido. Faça sua pergunta; ela será enviada após 2,8 segundos de silêncio. Diga CANCELAR para descartar.");
+      notice("ABRE reconhecido. Faça sua pergunta e diga AGORA para enviar à IA.");
     } catch (error) {
       resetRoomTurn(turnId);
       mode = "idle";
@@ -315,15 +305,15 @@ export function createVoiceCommands({
   }
 
   async function submitQuestion() {
-    clearSilenceTimer();
     const question = questionParts.join(" ").replace(/\s+/g, " ").trim();
     if (!question) {
       mode = "listening";
-      notice("Ainda não consegui reconhecer sua pergunta. Continue falando ou diga CANCELAR.");
+      notice("Ainda não consegui reconhecer sua pergunta. Continue falando e diga AGORA quando terminar.");
       return;
     }
 
     mode = "answering";
+    pauseRecognition();
     const ticket = ++turnVersion;
     status("Pergunta recebida. Ciclope pensando");
     void answerQuestion(question.slice(0, MAX_QUESTION_LENGTH), activeTurnId, ticket);
@@ -457,8 +447,7 @@ export function createVoiceCommands({
 
   function participantDisconnected(participant) {
     if (participant?.identity === activeOwner) {
-      clearSilenceTimer();
-      speechVersion += 1;
+        speechVersion += 1;
       if (window.speechSynthesis) window.speechSynthesis.cancel();
       speaking = false;
       resumeRecognition();
@@ -477,17 +466,13 @@ export function createVoiceCommands({
 
     const currentLength = questionParts.join(" ").length;
     if (currentLength + cleaned.length + 1 > MAX_QUESTION_LENGTH) {
-      notice(`A pergunta atingiu o limite de ${MAX_QUESTION_LENGTH} caracteres. Diga CANCELAR e tente novamente com uma pergunta menor.`);
+      notice(`A pergunta atingiu o limite de ${MAX_QUESTION_LENGTH} caracteres. Encerre esta tentativa pelo botão e tente novamente.`);
       return;
     }
 
     questionParts.push(cleaned);
     lastFragment = cleaned;
-    clearSilenceTimer();
-    silenceTimer = window.setTimeout(() => {
-      if (!disposed && mode === "listening") void submitQuestion();
-    }, SILENCE_TO_SEND_MS);
-    status("Captando sua pergunta — envio automático após silêncio");
+    status("Captando sua pergunta — diga AGORA para enviar");
   }
 
   async function processTranscript(raw) {
@@ -495,13 +480,6 @@ export function createVoiceCommands({
     const transcript = String(raw || "").trim();
     const command = normalize(transcript);
     if (!command) return;
-
-    if (command === "cancelar") {
-      if (mode !== "idle" || speaking || roomBusy) {
-        await cancelActiveTurn("Comando CANCELAR reconhecido. Interação interrompida.");
-      }
-      return;
-    }
 
     if (mode === "idle" && (command === "abre" || command.startsWith("abre "))) {
       await startListening();
@@ -511,6 +489,18 @@ export function createVoiceCommands({
     }
 
     if (mode !== "listening") return;
+
+    const startsWithAgora = /^(agora)(?:[\s,:;.!?\-]|$)/i.test(transcript);
+    const endsWithAgora = /(?:^|[\s,:;.!?\-])agora[.!?]*$/i.test(transcript);
+    if (startsWithAgora || endsWithAgora) {
+      const remainder = startsWithAgora
+        ? transcript.replace(/^agora[\s,:;.!?\-]*/i, "").trim()
+        : transcript.replace(/(?:^|[\s,:;.!?\-])agora[.!?]*$/i, "").trim();
+      if (remainder) appendQuestion(remainder);
+      await submitQuestion();
+      return;
+    }
+
     if (command === "abre") return;
     appendQuestion(transcript);
   }
@@ -535,7 +525,6 @@ export function createVoiceCommands({
     dispose() {
       if (disposed) return;
       disposed = true;
-      clearSilenceTimer();
       turnVersion += 1;
       speechVersion += 1;
       requestAbort?.abort();
