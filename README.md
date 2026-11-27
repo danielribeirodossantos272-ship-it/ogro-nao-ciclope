@@ -1,40 +1,33 @@
 # Ogro Não, Ciclope
 
-Primeira estrutura do projeto de sala coletiva de estudos por voz.
+Aplicação de estudo coletivo com salas de voz, histórico compartilhado e IA integrada à Groq.
 
-## Estado desta versão
+## Funcionalidades
 
-Esta versão contém somente a interface inicial em React + Vite. Os botões ainda não criam salas reais, não conectam microfones e não chamam provedores de IA. Nenhuma chave de API está incluída.
+- Criação e entrada em salas pelo Supabase.
+- Áudio em tempo real entre participantes pelo LiveKit.
+- Chat da sala com histórico compartilhado no Supabase.
+- Respostas de texto geradas pela Groq.
+- Voz pt-BR sintetizada uma vez no servidor pelo Google Cloud Text-to-Speech e transmitida a todos os participantes como uma faixa de áudio LiveKit.
+- Comandos de voz: `ABRE`, `AGORA` e `CANCELAR`.
 
-## Como publicar usando somente o iPhone
+## Desenvolvimento
 
-1. Extraia este ZIP no iPhone usando o app Arquivos.
-2. Entre em https://github.com e crie uma conta ou entre na sua.
-3. Crie um repositório novo chamado `ogro-nao-ciclope`.
-4. No repositório, use **Add file → Upload files** e envie os arquivos e pastas extraídos, preservando a estrutura.
-5. Faça o commit dos arquivos.
-6. Entre em https://vercel.com, escolha continuar com GitHub e autorize o acesso ao repositório.
-7. Importe `ogro-nao-ciclope` na Vercel. Framework: Vite. Build command: `npm run build`. Output directory: `dist`.
-8. Publique. A Vercel fornecerá um endereço para abrir o site.
+```bash
+npm install
+npm run dev
+```
 
-Se o seletor de arquivos do iPhone não permitir enviar as pastas corretamente, faça o upload dos arquivos em etapas mantendo os caminhos `src/` e `src/App.jsx`, `src/main.jsx`, `src/style.css`.
+## Deploy
 
-## Próximas etapas técnicas
+O projeto usa Vite para a interface e funções serverless em `api/` para comunicação com Groq, Supabase e Google Cloud Text-to-Speech. O deploy é feito pela Vercel.
 
-- Backend seguro para credenciais e seleção de provedores.
-- LiveKit para áudio em grupo.
-- Supabase Auth, banco de dados e armazenamento.
-- Pipeline de extração de texto/OCR e RAG para materiais.
-- Orquestrador de voz e estados: idle → listening → confirmation → answering.
-- Fallback entre provedores, com tratamento de limites, erros e custos.
+Mantenha as variáveis existentes de Groq e Supabase. Para ativar a voz, configure `GOOGLE_TTS_SERVICE_ACCOUNT_JSON` na Vercel. Consulte `AI_SETUP.md` e `DEPLOY_VOICE_UPDATE.md` antes de publicar.
 
-## Segurança
+## Fluxo por voz
 
-Nunca coloque chaves secretas de APIs em arquivos React, no navegador ou em repositório público. As chaves deverão ficar em variáveis de ambiente do backend.
-
-
-## Inteligência compartilhada (integração em preparação)
-
-A integração de chat da IA utiliza uma função serverless em `api/ai/messages.js`, o cliente em `src/services/aiClient.js` e o componente `src/components/StudyChat.jsx`. A conversa é armazenada por sala na tabela `public.room_ai_messages`.
-
-Configure `GROQ_API_KEY`, `SUPABASE_SECRET_KEY` e `SUPABASE_URL` (ou reutilize `VITE_SUPABASE_URL`) como variáveis server-side na Vercel. Nunca use prefixo `VITE_` nas chaves secretas. Consulte `AI_SETUP.md` antes de publicar.
+1. Entre na sala, conecte o áudio e ative a reprodução dos participantes.
+2. Ative os comandos de voz.
+3. Diga `ABRE`, faça sua pergunta e diga `AGORA` isoladamente para enviar.
+4. O Ciclope responde por texto e voz para todos na sala.
+5. Diga `CANCELAR` para descartar a pergunta ou interromper a interação.
