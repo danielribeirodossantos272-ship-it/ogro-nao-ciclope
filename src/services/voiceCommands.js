@@ -1,11 +1,10 @@
 import { RoomEvent } from "livekit-client";
-import { sendRoomQuestion } from "./aiClient.js";
+import { getRoomMessages, sendRoomQuestion } from "./aiClient.js";
 
 const CONTROL_TOPIC = "ciclope-room-control-v4";
 const MAX_QUESTION_LENGTH = 4000;
-const SILENCE_DELAY_MS = 2500;
-const MAX_DATA_CHUNK_BYTES = 4500;
-const MAX_SPEECH_CHARS = 180;
+const SILENCE_TO_SEND_MS = 2800;
+const SPEECH_CHUNK_LENGTH = 420;
 
 function normalize(value = "") {
   return String(value)
@@ -21,101 +20,77 @@ function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function splitForData(text, maxBytes = MAX_DATA_CHUNK_BYTES) {
-  const encoder = new TextEncoder();
-  const chunks = [];
-  let current = "";
-  let currentBytes = 0;
-
-  for (const character of String(text)) {
-    const size = encoder.encode(character).length;
-    if (current && currentBytes + size > maxBytes) {
-      chunks.push(current);
-      current = "";
-      currentBytes = 0;
-    }
-    current += character;
-    currentBytes += size;
-  }
-  if (current) chunks.push(current);
-  return chunks;
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function cleanSpeechText(value) {
-  return String(value || "")
-    .replace(/```[\s\S]*?```/g, "O trecho de código está disponível no chat.")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\((?:https?:\/\/)?[^)]+\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, "")
-    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/^\s*\d+[.)]\s+/gm, "")
-    .replace(/\*\*|__|~~|\*/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+function splitForSpeech(value, maxLength = SPEECH_CHUNK_LENGTH) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return [];
 
-function splitForSpeech(text, maxChars = MAX_SPEECH_CHARS) {
-  const cleaned = cleanSpeechText(text);
-  if (!cleaned) return [];
-
-  const sentences = cleaned.match(/[^.!?]+[.!?]?/g) || [cleaned];
+  const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];
   const chunks = [];
   let current = "";
 
-  for (const sentence of sentences) {
-    const words = sentence.trim().split(/\s+/);
-    for (const word of words) {
-      const next = current ? `${current} ${word}` : word;
-      if (next.length > maxChars && current) {
-        chunks.push(current);
-        current = word;
-      } else {
-        current = next;
+  for (const sentenceValue of sentences) {
+    const sentence = sentenceValue.trim();
+    if (!sentence) continue;
+
+    if (sentence.length > maxLength) {
+      const words = sentence.split(/\s+/);
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        if (candidate.length > maxLength && current) {
+          chunks.push(current);
+          current = word;
+        } else {
+          current = candidate;
+        }
       }
+      continue;
     }
-    if (current && /[.!?]$/.test(sentence.trim())) {
+
+    const candidate = current ? `${current} ${sentence}` : sentence;
+    if (candidate.length > maxLength && current) {
       chunks.push(current);
-      current = "";
+      current = sentence;
+    } else {
+      current = candidate;
     }
   }
+
   if (current) chunks.push(current);
   return chunks;
 }
 
-function findPortugueseVoice(synthesis) {
-  const voices = synthesis.getVoices?.() || [];
-  return voices.find((voice) => /^pt-BR$/i.test(voice.lang))
-    || voices.find((voice) => /^pt(-|_)/i.test(voice.lang))
-    || null;
+function findMessage(messages, id) {
+  return (messages || []).find((message) => String(message.id) === String(id));
 }
 
 export function createVoiceCommands({
   room,
   roomCode,
   participantId,
-  isOpen,
-  open,
-  close,
   notice,
-  status
+  status,
+  pauseRecognition = () => {},
+  resumeRecognition = () => {}
 }) {
-  let mode = "idle"; // idle | listening | answering | finishing | cancelling
+  let mode = "idle"; // idle | listening | answering | speaking | cancelling
   let questionParts = [];
+  let lastFragment = "";
   let disposed = false;
   let speaking = false;
-  let ownsSpeech = false;
   let roomBusy = false;
   let activeOwner = null;
   let activeTurnId = null;
   let activeSpeechId = null;
   let turnVersion = 0;
+  let speechVersion = 0;
   let requestAbort = null;
   let silenceTimer = null;
-  let speechResolve = null;
-  let turnEndPending = false;
   let commandQueue = Promise.resolve();
-  const answerAssemblies = new Map();
+  const processedSpeechIds = new Set();
   const localIdentity = room.localParticipant.identity;
 
   async function publishControl(payload) {
@@ -131,26 +106,6 @@ export function createVoiceCommands({
     if (!disposed) notice(error?.message || String(error));
   }
 
-  // Chame esta função a partir de um toque do usuário para preparar a voz
-  // nativa do navegador, especialmente no Safari do iPhone.
-  function unlockAudio() {
-    const synthesis = window.speechSynthesis;
-    const Utterance = window.SpeechSynthesisUtterance;
-    if (!synthesis || !Utterance) return false;
-
-    try {
-      const silent = new Utterance(" ");
-      silent.lang = "pt-BR";
-      silent.volume = 0;
-      silent.rate = 1;
-      synthesis.speak(silent);
-      return true;
-    } catch (error) {
-      console.warn("Não foi possível preparar a voz do navegador:", error);
-      return false;
-    }
-  }
-
   function clearSilenceTimer() {
     if (silenceTimer !== null) {
       window.clearTimeout(silenceTimer);
@@ -158,76 +113,164 @@ export function createVoiceCommands({
     }
   }
 
-  function clearLocalSpeech() {
-    const synthesis = window.speechSynthesis;
-    if (synthesis) {
-      try { synthesis.cancel(); } catch { /* A fila já estava vazia. */ }
-    }
-    const resolve = speechResolve;
-    speechResolve = null;
-    if (resolve) resolve(false);
-    speaking = false;
-    ownsSpeech = false;
-    activeSpeechId = null;
-  }
-
   function resetRoomTurn(turnId) {
     if (turnId && activeTurnId && turnId !== activeTurnId) return;
     roomBusy = false;
     activeOwner = null;
     activeTurnId = null;
-    activeSpeechId = null;
-    speaking = false;
-    ownsSpeech = false;
-    turnEndPending = false;
+    if (!speaking) activeSpeechId = null;
   }
 
-  async function finishTurn(message = "Resposta concluída. Diga ABRE para fazer outra pergunta.", notifyRoom = true) {
-    const turnId = activeTurnId;
-    const wasOwner = activeOwner === localIdentity;
-    mode = "finishing";
-    clearSilenceTimer();
+  function speakUtterance(text, version) {
+    return new Promise((resolve, reject) => {
+      const speechSynthesis = window.speechSynthesis;
+      const Utterance = window.SpeechSynthesisUtterance;
+      if (!speechSynthesis || !Utterance) {
+        reject(new Error("A síntese de voz não está disponível neste navegador."));
+        return;
+      }
 
-    if (isOpen()) {
-      await close(message);
-    } else if (message) {
-      notice(message);
+      const utterance = new Utterance(text);
+      utterance.lang = "pt-BR";
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+
+      const voices = speechSynthesis.getVoices?.() || [];
+      const portugueseVoice =
+        voices.find((voice) => voice.lang?.toLowerCase() === "pt-br") ||
+        voices.find((voice) => voice.lang?.toLowerCase().startsWith("pt"));
+      if (portugueseVoice) utterance.voice = portugueseVoice;
+
+      let settled = false;
+      const timeout = window.setTimeout(() => finish(), 45000);
+      function finish(error) {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        if (error && version === speechVersion) reject(error);
+        else resolve();
+      }
+
+      utterance.onend = () => finish();
+      utterance.onerror = (event) => {
+        if (event.error === "canceled" || event.error === "interrupted") finish();
+        else finish(new Error(`Falha na reprodução de voz: ${event.error || "erro desconhecido"}.`));
+      };
+
+      if (version !== speechVersion) {
+        finish();
+        return;
+      }
+      speechSynthesis.speak(utterance);
+    });
+  }
+
+  async function playQuestionAndAnswer(question, answer, turnId, speechId, ticket) {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+      throw new Error("Este navegador não oferece síntese de voz. A resposta continua disponível no chat.");
     }
+    if (disposed || ticket !== turnVersion) return;
 
-    if (notifyRoom && wasOwner && turnId && !disposed) {
-      try {
-        await publishControl({ type: "turn-end", turnId, owner: localIdentity });
-      } catch (error) {
-        console.warn("Não foi possível liberar a sala:", error);
+    speaking = true;
+    mode = "speaking";
+    activeSpeechId = speechId;
+    const currentSpeechVersion = ++speechVersion;
+    pauseRecognition();
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.resume();
+
+    try {
+      status("Ciclope repetindo a pergunta");
+      const questionIntro = `Você perguntou: ${question}`;
+      for (const chunk of splitForSpeech(questionIntro)) {
+        if (disposed || ticket !== turnVersion || currentSpeechVersion !== speechVersion) return;
+        await speakUtterance(chunk, currentSpeechVersion);
+      }
+
+      status("Ciclope respondendo");
+      for (const chunk of splitForSpeech(answer)) {
+        if (disposed || ticket !== turnVersion || currentSpeechVersion !== speechVersion) return;
+        await speakUtterance(chunk, currentSpeechVersion);
+      }
+    } finally {
+      if (currentSpeechVersion === speechVersion) {
+        speaking = false;
+        activeSpeechId = null;
+        if (!disposed) resumeRecognition();
+        if (mode === "speaking") mode = "idle";
       }
     }
+  }
 
-    if (wasOwner || !roomBusy) resetRoomTurn(turnId);
+  async function loadMessagesForSpeech(payload) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (disposed) return null;
+      const result = await getRoomMessages(roomCode, participantId);
+      const questionMessage = findMessage(result.messages, payload.questionMessageId);
+      const answerMessage = findMessage(result.messages, payload.answerMessageId);
+      if (questionMessage && answerMessage) {
+        return {
+          question: questionMessage.content,
+          answer: answerMessage.content
+        };
+      }
+      await sleep(400);
+    }
+    throw new Error("Não consegui carregar a pergunta e a resposta compartilhadas.");
+  }
+
+  async function finishOwnerTurn(turnId, message = "Resposta concluída. Diga ABRE para fazer outra pergunta.") {
+    if (disposed) return;
+    try {
+      await publishControl({ type: "turn-end", turnId, owner: localIdentity });
+    } catch (error) {
+      console.warn("Não foi possível finalizar a interação na sala:", error);
+    }
+    resetRoomTurn(turnId);
     questionParts = [];
+    lastFragment = "";
     requestAbort = null;
     mode = "idle";
-    status(roomBusy ? "Outro participante está usando o Ciclope" : "Ouvindo o comando ABRE");
+    status("Ouvindo o comando ABRE");
+    if (message) notice(message);
   }
 
   async function cancelActiveTurn(message = "Interação cancelada.", notifyRoom = true) {
+    clearSilenceTimer();
     const turnId = activeTurnId;
     const wasOwner = activeOwner === localIdentity;
-    const wasSpeaking = speaking;
+    const isRemoteTurn = roomBusy && activeOwner && activeOwner !== localIdentity;
+
+    if (!wasOwner && isRemoteTurn && notifyRoom) {
+      if (speaking) {
+        speechVersion += 1;
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+        speaking = false;
+        activeSpeechId = null;
+        mode = "idle";
+        resumeRecognition();
+      }
+      try {
+        await publishControl({ type: "turn-cancel-request", turnId, requester: localIdentity });
+        notice("Pedido para cancelar a interação enviado.");
+      } catch (error) {
+        reportError(error);
+      }
+      return;
+    }
 
     turnVersion += 1;
-    clearSilenceTimer();
+    speechVersion += 1;
     requestAbort?.abort();
     requestAbort = null;
     mode = "cancelling";
     questionParts = [];
-    clearLocalSpeech();
-    answerAssemblies.clear();
-
-    if (isOpen()) {
-      await close(message);
-    } else {
-      notice(message);
-    }
+    lastFragment = "";
+    speaking = false;
+    activeSpeechId = null;
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    resumeRecognition();
 
     if (notifyRoom && wasOwner && turnId && !disposed) {
       try {
@@ -235,17 +278,12 @@ export function createVoiceCommands({
       } catch (error) {
         console.warn("Não foi possível notificar o cancelamento:", error);
       }
-    } else if (notifyRoom && !wasOwner && (roomBusy || wasSpeaking) && turnId && !disposed) {
-      try {
-        await publishControl({ type: "turn-cancel-request", turnId, requester: localIdentity });
-      } catch (error) {
-        console.warn("Não foi possível solicitar o cancelamento:", error);
-      }
     }
 
-    if (wasOwner || !roomBusy) resetRoomTurn(turnId);
+    if (wasOwner) resetRoomTurn(turnId);
     mode = "idle";
     status(roomBusy ? "Outro participante está usando o Ciclope" : "Ouvindo o comando ABRE");
+    if (message) notice(message);
   }
 
   async function startListening() {
@@ -260,127 +298,43 @@ export function createVoiceCommands({
     activeTurnId = turnId;
     activeOwner = localIdentity;
     roomBusy = true;
-    turnEndPending = false;
     mode = "listening";
     questionParts = [];
+    lastFragment = "";
+    clearSilenceTimer();
 
     try {
       await publishControl({ type: "turn-start", turnId, owner: localIdentity });
-      await open("comando");
-
-      if (!isOpen()) {
-        await finishTurn("Não consegui abrir o microfone. Tente novamente.");
-        return;
-      }
-
-      status("Ouvindo sua pergunta");
-      notice("Pode fazer sua pergunta. Quando terminar, fique em silêncio por cerca de 2,5 segundos e o Ciclope enviará automaticamente.");
+      status("Pode fazer sua pergunta");
+      notice("ABRE reconhecido. Faça sua pergunta; ela será enviada após 2,8 segundos de silêncio. Diga CANCELAR para descartar.");
     } catch (error) {
-      await finishTurn(error.message || "Não foi possível iniciar a pergunta.");
+      resetRoomTurn(turnId);
+      mode = "idle";
+      reportError(error);
     }
   }
 
-  function speakLocally(text, turnId, speechId, ticket) {
-    const synthesis = window.speechSynthesis;
-    const Utterance = window.SpeechSynthesisUtterance;
-    const chunks = splitForSpeech(text);
-
-    if (!synthesis || !Utterance) {
-      notice("A resposta está no chat, mas este navegador não oferece síntese de voz.");
-      return Promise.resolve(false);
-    }
-    if (!chunks.length) return Promise.resolve(true);
-
-    synthesis.cancel();
-    speaking = true;
-    activeSpeechId = speechId;
-    status("Ciclope falando para a sala");
-
-    return new Promise((resolve) => {
-      let index = 0;
-      let settled = false;
-      const finish = (success) => {
-        if (settled) return;
-        settled = true;
-        if (speechResolve === finishResolve) speechResolve = null;
-        resolve(success);
-      };
-      const finishResolve = (success) => finish(success);
-      speechResolve = finishResolve;
-
-      const speakNext = () => {
-        if (disposed || ticket !== turnVersion || activeSpeechId !== speechId) {
-          finish(false);
-          return;
-        }
-        if (index >= chunks.length) {
-          finish(true);
-          return;
-        }
-
-        const utterance = new Utterance(chunks[index]);
-        index += 1;
-        utterance.lang = "pt-BR";
-        utterance.rate = 1;
-        utterance.pitch = 1;
-        utterance.volume = 1;
-        const voice = findPortugueseVoice(synthesis);
-        if (voice) utterance.voice = voice;
-        utterance.onend = speakNext;
-        utterance.onerror = (event) => {
-          if (event.error !== "interrupted" && event.error !== "canceled") {
-            console.warn("Erro na síntese de voz do navegador:", event.error);
-          }
-          finish(false);
-        };
-
-        try {
-          synthesis.speak(utterance);
-        } catch (error) {
-          console.warn("Não foi possível reproduzir a resposta:", error);
-          finish(false);
-        }
-      };
-
-      speakNext();
-    });
-  }
-
-  async function publishAnswerText(answer, turnId, speechId) {
-    const chunks = splitForData(answer);
-    await publishControl({
-      type: "answer-start",
-      turnId,
-      speechId,
-      owner: localIdentity,
-      totalChunks: chunks.length
-    });
-
-    for (let index = 0; index < chunks.length; index += 1) {
-      await publishControl({
-        type: "answer-chunk",
-        turnId,
-        speechId,
-        owner: localIdentity,
-        index,
-        text: chunks[index]
-      });
+  async function submitQuestion() {
+    clearSilenceTimer();
+    const question = questionParts.join(" ").replace(/\s+/g, " ").trim();
+    if (!question) {
+      mode = "listening";
+      notice("Ainda não consegui reconhecer sua pergunta. Continue falando ou diga CANCELAR.");
+      return;
     }
 
-    await publishControl({ type: "answer-end", turnId, speechId, owner: localIdentity });
+    mode = "answering";
+    const ticket = ++turnVersion;
+    status("Pergunta recebida. Ciclope pensando");
+    void answerQuestion(question.slice(0, MAX_QUESTION_LENGTH), activeTurnId, ticket);
   }
 
   async function answerQuestion(question, turnId, ticket) {
     const controller = new AbortController();
     requestAbort = controller;
-    let completionMessage = "Resposta concluída. Diga ABRE para fazer outra pergunta.";
     let answerWasSaved = false;
 
     try {
-      await close("Pergunta enviada. O Ciclope está preparando a resposta.");
-      if (disposed || ticket !== turnVersion) return;
-
-      status("Ciclope pensando");
       const result = await sendRoomQuestion({
         roomCode,
         participantId,
@@ -389,62 +343,39 @@ export function createVoiceCommands({
       });
       if (disposed || ticket !== turnVersion) return;
 
-      const answer = [...(result.messages || [])]
-        .reverse()
-        .find((message) => message.role === "assistant")?.content;
+      const questionMessage = (result.messages || []).find((message) => message.role === "user");
+      const answerMessage = [...(result.messages || [])].reverse().find((message) => message.role === "assistant");
+      const answer = answerMessage?.content;
       if (!answer) throw new Error("A IA não retornou uma resposta de texto.");
       answerWasSaved = true;
 
-      // Uma única resposta textual é distribuída pelo LiveKit. Cada aparelho
-      // usa a voz nativa disponível localmente, sem Google TTS ou chave extra.
+      if (!questionMessage?.id || !answerMessage?.id) {
+        throw new Error("A resposta foi salva, mas não recebi os identificadores para compartilhá-la por voz.");
+      }
+
       const speechId = `${turnId}-speech-${makeId()}`;
-      activeSpeechId = speechId;
-      speaking = true;
-      ownsSpeech = true;
-      await publishAnswerText(answer, turnId, speechId);
-      if (disposed || ticket !== turnVersion) return;
+      await publishControl({
+        type: "answer-ready",
+        turnId,
+        speechId,
+        owner: localIdentity,
+        questionMessageId: questionMessage.id,
+        answerMessageId: answerMessage.id
+      });
 
-      const played = await speakLocally(answer, turnId, speechId, ticket);
-      if (!played) {
-        completionMessage = "A resposta está no chat. Não foi possível reproduzir a voz neste aparelho.";
-      }
+      await playQuestionAndAnswer(question, answer, turnId, speechId, ticket);
       if (disposed || ticket !== turnVersion) return;
-
-      speaking = false;
-      ownsSpeech = false;
-      activeSpeechId = null;
+      await finishOwnerTurn(turnId, "Resposta concluída. Diga ABRE para fazer outra pergunta.");
     } catch (error) {
-      if (ticket === turnVersion && error?.name !== "AbortError") {
-        completionMessage = answerWasSaved
-          ? `A resposta foi salva no chat, mas não consegui reproduzir a voz: ${error.message}`
-          : `Não consegui concluir a pergunta: ${error.message}`;
-      }
-    } finally {
-      if (!disposed && ticket === turnVersion) {
-        await finishTurn(completionMessage);
-      }
+      if (disposed || ticket !== turnVersion || error?.name === "AbortError") return;
+      const message = answerWasSaved
+        ? `A resposta está no chat, mas não consegui reproduzir a voz: ${error.message}`
+        : `Não consegui concluir a pergunta: ${error.message}`;
+      await finishOwnerTurn(turnId, message);
     }
   }
 
-  async function playRemoteAnswer(text, turnId, speechId) {
-    if (disposed || turnId !== activeTurnId) return;
-    const ticket = turnVersion;
-    speaking = true;
-    activeSpeechId = speechId;
-    const played = await speakLocally(text, turnId, speechId, ticket);
-    if (disposed || turnId !== activeTurnId || activeSpeechId !== speechId) return;
-    speaking = false;
-    activeSpeechId = null;
-    if (!played) notice("A resposta está no chat. Não foi possível reproduzir a voz neste aparelho.");
-    if (turnEndPending) {
-      resetRoomTurn(turnId);
-      if (mode === "idle") status("Ouvindo o comando ABRE");
-    } else {
-      status("Aguardando o fim da resposta do Ciclope");
-    }
-  }
-
-  function receiveControl(bytes, participant, kind, incomingTopic) {
+  async function receiveControl(bytes, participant, kind, incomingTopic) {
     if (disposed || incomingTopic !== CONTROL_TOPIC || !participant) return;
 
     try {
@@ -454,76 +385,70 @@ export function createVoiceCommands({
 
       if (payload.type === "turn-start" && incomingOwner !== localIdentity) {
         if (roomBusy && activeOwner === localIdentity && mode !== "listening") return;
-
         if (roomBusy && activeOwner && activeOwner !== incomingOwner) {
           if (String(activeOwner).localeCompare(String(incomingOwner)) <= 0) return;
         }
-
         if (mode === "listening" && activeOwner === localIdentity && activeTurnId) {
           if (String(localIdentity).localeCompare(String(incomingOwner)) < 0) return;
-          void (async () => {
-            await cancelActiveTurn("Outra pessoa iniciou a pergunta primeiro. Sua tentativa foi cancelada.", false);
-            roomBusy = true;
-            activeOwner = incomingOwner;
-            activeTurnId = payload.turnId || null;
-            status("Outro participante está fazendo uma pergunta");
-          })();
-          return;
+          await cancelActiveTurn("Outra pessoa iniciou a pergunta primeiro. Sua tentativa foi cancelada.", false);
         }
-
         roomBusy = true;
         activeOwner = incomingOwner;
         activeTurnId = payload.turnId || null;
-        turnEndPending = false;
         if (mode === "idle" && !speaking) status("Outro participante está fazendo uma pergunta");
         return;
       }
 
-      if (payload.type === "answer-start" && incomingOwner !== localIdentity && payload.turnId === activeTurnId) {
-        answerAssemblies.set(payload.speechId, {
-          turnId: payload.turnId,
-          totalChunks: Math.max(0, Number(payload.totalChunks) || 0),
-          chunks: []
-        });
-        activeSpeechId = payload.speechId;
-        speaking = true;
-        status("Preparando a voz do Ciclope");
-        return;
-      }
-
-      if (payload.type === "answer-chunk" && incomingOwner !== localIdentity && payload.turnId === activeTurnId) {
-        const assembly = answerAssemblies.get(payload.speechId);
-        if (assembly && Number.isInteger(payload.index) && payload.index >= 0) {
-          assembly.chunks[payload.index] = String(payload.text || "");
+      if (payload.type === "answer-ready" && incomingOwner !== localIdentity) {
+        if (payload.turnId !== activeTurnId || !payload.speechId) return;
+        if (processedSpeechIds.has(payload.speechId)) return;
+        processedSpeechIds.add(payload.speechId);
+        while (processedSpeechIds.size > 30) {
+          processedSpeechIds.delete(processedSpeechIds.values().next().value);
         }
-        return;
-      }
 
-      if (payload.type === "answer-end" && incomingOwner !== localIdentity && payload.turnId === activeTurnId) {
-        const assembly = answerAssemblies.get(payload.speechId);
-        if (!assembly) return;
-        answerAssemblies.delete(payload.speechId);
-        const text = assembly.chunks.slice(0, assembly.totalChunks).join("");
-        if (text.trim()) void playRemoteAnswer(text, payload.turnId, payload.speechId);
+        const ticket = turnVersion;
+        speaking = true;
+        mode = "speaking";
+        activeSpeechId = payload.speechId;
+        pauseRecognition();
+        status("Preparando a voz do Ciclope");
+
+        try {
+          const messages = await loadMessagesForSpeech(payload);
+          if (!messages || disposed || ticket !== turnVersion || activeSpeechId !== payload.speechId) return;
+          await playQuestionAndAnswer(messages.question, messages.answer, payload.turnId, payload.speechId, ticket);
+          if (!disposed && mode === "speaking") mode = "idle";
+          if (!disposed) status(roomBusy ? "Aguardando a próxima interação" : "Ouvindo o comando ABRE");
+        } catch (error) {
+          if (!disposed) notice(`A resposta chegou ao chat, mas não consegui reproduzir a voz neste aparelho: ${error.message}`);
+        } finally {
+          if (!disposed && activeSpeechId === payload.speechId) {
+            speaking = false;
+            activeSpeechId = null;
+            resumeRecognition();
+            if (mode === "speaking") mode = "idle";
+          }
+        }
         return;
       }
 
       if (payload.type === "turn-end" && payload.turnId === activeTurnId) {
         if (payload.cancelled) {
-          clearLocalSpeech();
-          answerAssemblies.clear();
-          resetRoomTurn(payload.turnId);
-        } else if (speaking) {
-          turnEndPending = true;
-        } else {
-          resetRoomTurn(payload.turnId);
+          turnVersion += 1;
+          speechVersion += 1;
+          if (window.speechSynthesis) window.speechSynthesis.cancel();
+          speaking = false;
+          activeSpeechId = null;
+          resumeRecognition();
         }
+        resetRoomTurn(payload.turnId);
         if (mode === "idle" && !speaking) status("Ouvindo o comando ABRE");
         return;
       }
 
       if (payload.type === "turn-cancel-request" && payload.turnId === activeTurnId && activeOwner === localIdentity) {
-        void cancelActiveTurn("Um participante cancelou a interação.");
+        await cancelActiveTurn("Um participante cancelou a interação.");
       }
     } catch (error) {
       console.warn("Mensagem de controle de voz inválida:", error);
@@ -532,45 +457,37 @@ export function createVoiceCommands({
 
   function participantDisconnected(participant) {
     if (participant?.identity === activeOwner) {
-      clearLocalSpeech();
+      clearSilenceTimer();
+      speechVersion += 1;
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      speaking = false;
+      resumeRecognition();
       resetRoomTurn(activeTurnId);
+      if (mode !== "listening") mode = "idle";
       if (mode === "idle") status("Ouvindo o comando ABRE");
     }
   }
 
-  async function submitQuestion() {
-    clearSilenceTimer();
-    const question = questionParts.join(" ").replace(/\s+/g, " ").trim();
-    if (!question) {
-      notice("Ainda não captei sua pergunta. Continue falando ou diga CANCELAR.");
-      return;
-    }
-
-    mode = "answering";
-    const ticket = ++turnVersion;
-    status("Silêncio detectado. Ciclope pensando");
-    void answerQuestion(question.slice(0, MAX_QUESTION_LENGTH), activeTurnId, ticket);
-  }
-
-  function scheduleAutoSubmit() {
-    clearSilenceTimer();
-    if (mode !== "listening" || !questionParts.length) return;
-    silenceTimer = window.setTimeout(() => {
-      silenceTimer = null;
-      if (mode === "listening" && questionParts.length) void submitQuestion();
-    }, SILENCE_DELAY_MS);
-  }
+  room.on(RoomEvent.DataReceived, receiveControl);
+  room.on(RoomEvent.ParticipantDisconnected, participantDisconnected);
 
   function appendQuestion(fragment) {
-    if (!fragment) return;
+    const cleaned = String(fragment || "").replace(/\s+/g, " ").trim();
+    if (!cleaned || cleaned === lastFragment) return;
+
     const currentLength = questionParts.join(" ").length;
-    if (currentLength + fragment.length + 1 > MAX_QUESTION_LENGTH) {
-      notice(`A pergunta atingiu o limite de ${MAX_QUESTION_LENGTH} caracteres. Ela será enviada após uma pausa.`);
+    if (currentLength + cleaned.length + 1 > MAX_QUESTION_LENGTH) {
+      notice(`A pergunta atingiu o limite de ${MAX_QUESTION_LENGTH} caracteres. Diga CANCELAR e tente novamente com uma pergunta menor.`);
       return;
     }
-    questionParts.push(fragment);
-    status("Pergunta em andamento — aguardando você terminar");
-    scheduleAutoSubmit();
+
+    questionParts.push(cleaned);
+    lastFragment = cleaned;
+    clearSilenceTimer();
+    silenceTimer = window.setTimeout(() => {
+      if (!disposed && mode === "listening") void submitQuestion();
+    }, SILENCE_TO_SEND_MS);
+    status("Captando sua pergunta — envio automático após silêncio");
   }
 
   async function processTranscript(raw) {
@@ -579,20 +496,13 @@ export function createVoiceCommands({
     const command = normalize(transcript);
     if (!command) return;
 
-    // CANCELAR é reconhecido apenas quando é a palavra isolada.
     if (command === "cancelar") {
-      if (roomBusy && activeOwner && activeOwner !== localIdentity && mode === "idle") {
-        await publishControl({ type: "turn-cancel-request", turnId: activeTurnId, requester: localIdentity });
-        notice("Pedido para cancelar a interação enviado.");
-        return;
-      }
-      if (mode !== "idle" || speaking || isOpen()) {
+      if (mode !== "idle" || speaking || roomBusy) {
         await cancelActiveTurn("Comando CANCELAR reconhecido. Interação interrompida.");
       }
       return;
     }
 
-    // ABRE pode chegar junto com o início da pergunta em um mesmo resultado.
     if (mode === "idle" && (command === "abre" || command.startsWith("abre "))) {
       await startListening();
       const remainder = transcript.replace(/^abre[\s,:;.!?\-]*/i, "").trim();
@@ -601,33 +511,37 @@ export function createVoiceCommands({
     }
 
     if (mode !== "listening") return;
-    // Não há mais comando AGORA. Qualquer outra fala é parte da pergunta.
+    if (command === "abre") return;
     appendQuestion(transcript);
   }
-
-  room.on(RoomEvent.DataReceived, receiveControl);
-  room.on(RoomEvent.ParticipantDisconnected, participantDisconnected);
 
   return {
     handle(raw) {
       commandQueue = commandQueue.then(() => processTranscript(raw)).catch(reportError);
       return commandQueue;
     },
-    unlockAudio,
+    unlockSpeech() {
+      if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+        throw new Error("A voz do navegador não está disponível neste aparelho.");
+      }
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+    },
     cancel() {
       if (disposed) return Promise.resolve();
-      if (mode === "idle" && !ownsSpeech && !speaking && !isOpen()) return Promise.resolve();
-      return cancelActiveTurn("Comandos de voz desativados.", true);
+      if (mode === "idle" && !speaking && !roomBusy) return Promise.resolve();
+      return cancelActiveTurn("Interação cancelada.", true);
     },
     dispose() {
       if (disposed) return;
       disposed = true;
-      turnVersion += 1;
       clearSilenceTimer();
+      turnVersion += 1;
+      speechVersion += 1;
       requestAbort?.abort();
       requestAbort = null;
-      clearLocalSpeech();
-      answerAssemblies.clear();
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      resumeRecognition();
       room.off(RoomEvent.DataReceived, receiveControl);
       room.off(RoomEvent.ParticipantDisconnected, participantDisconnected);
     }
