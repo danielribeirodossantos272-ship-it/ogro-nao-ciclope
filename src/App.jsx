@@ -8,15 +8,6 @@ import { createVoiceCommands } from "./services/voiceCommands";
 const LIVEKIT_TOKEN_SERVER_ID = "ogronociclope-1qyyky";
 const tokenSource = TokenSource.developmentTokenServer(LIVEKIT_TOKEN_SERVER_ID);
 
-function normalizeCommand(value = "") {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 export default function App() {
   const [roomCode, setRoomCode] = useState("");
@@ -234,10 +225,10 @@ export default function App() {
   }
 
   // ==========================================
-  // COMANDOS DE VOZ: ABRE / AGORA / CANCELAR
+  // COMANDOS DE VOZ: ABRE / CANCELAR
   // ==========================================
   function stopVoiceCommands() {
-    voiceControllerRef.current?.cancel(true);
+    voiceControllerRef.current?.cancel();
     recognitionEnabledRef.current = false;
     if (recognitionRef.current) {
       try {
@@ -269,6 +260,7 @@ export default function App() {
     }
 
     try {
+      voiceControllerRef.current?.unlockAudio();
       const recognition = new SpeechRecognition();
       recognition.lang = "pt-BR";
       recognition.continuous = true;
@@ -278,7 +270,7 @@ export default function App() {
       recognitionEnabledRef.current = true;
       setVoiceCommandSupported(true);
       setVoiceCommandStatus("Ouvindo o comando ABRE");
-      setNotice('Comandos ativos. Diga "ABRE" para abrir o canal de voz.');
+      setNotice('Comandos ativos: diga ABRE, faça sua pergunta e pare de falar por cerca de 2,5 segundos para enviar. Diga CANCELAR para interromper.');
 
       recognition.onresult = (event) => {
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -302,7 +294,7 @@ export default function App() {
         if (recognitionEnabledRef.current) {
           // O Safari pode encerrar uma sessão após alguns segundos; tenta reiniciar.
           window.setTimeout(() => {
-            if (!recognitionEnabledRef.current || recognitionRef.current !== recognition) return;
+            if (!recognitionEnabledRef.current) return;
             try {
               recognition.start();
             } catch (error) {
@@ -358,7 +350,7 @@ export default function App() {
           await audioElement.play();
         } catch (error) {
           console.warn("Autoplay bloqueado:", error);
-          setNotice('Áudio recebido. Toque em "Ativar áudio dos participantes".');
+          setNotice('Áudio recebido. Toque em "Ativar áudio e voz do Ciclope".');
         }
         updateAudioParticipants(liveRoom);
       });
@@ -371,6 +363,10 @@ export default function App() {
       liveRoom.on(RoomEvent.Disconnected, () => {
         voiceControllerRef.current?.dispose();
         voiceControllerRef.current = null;
+        recognitionEnabledRef.current = false;
+        try { recognitionRef.current?.stop(); } catch { /* Reconhecimento já encerrado. */ }
+        recognitionRef.current = null;
+        setVoiceCommandStatus("Desativado");
         if (liveKitRoomRef.current === liveRoom) liveKitRoomRef.current = null;
         channelOpenRef.current = false;
         setAudioConnected(false);
@@ -410,7 +406,7 @@ export default function App() {
       channelOpenRef.current = false;
       setMicEnabled(false);
       setMicPublished(false);
-      setNotice('Áudio conectado com o microfone fechado. Ative os comandos e diga "ABRE".');
+      setNotice('Áudio conectado. Ative os comandos, diga ABRE e faça sua pergunta. Após cerca de 2,5 segundos de silêncio, ela será enviada automaticamente.');
     } catch (error) {
       console.error("Erro ao conectar LiveKit:", error);
       liveRoom.disconnect();
@@ -436,7 +432,16 @@ export default function App() {
       return;
     }
     try {
+      // Prepara a síntese de voz nativa do navegador no gesto do usuário.
+      const voiceAudioUnlock = voiceControllerRef.current?.unlockAudio();
       await liveRoom.startAudio();
+      if (voiceAudioUnlock) {
+        try {
+          await voiceAudioUnlock;
+        } catch (unlockError) {
+          console.warn("Não foi possível preparar o áudio de voz do Ciclope:", unlockError);
+        }
+      }
       const elements = audioContainerRef.current?.querySelectorAll("audio") || [];
       for (const element of elements) {
         element.autoplay = true;
@@ -584,15 +589,14 @@ export default function App() {
                 </button>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 15 }}>
-                  <button className="primary" onClick={enableRemoteAudio}>Ativar áudio dos participantes</button>
-                  <button className="secondary" onClick={() => voiceControllerRef.current?.unlock()}>Ativar voz do Ciclope</button>
+                  <button className="primary" onClick={enableRemoteAudio}>Ativar áudio e voz do Ciclope</button>
 
                   <button className="secondary" onClick={startVoiceCommands} disabled={recognitionEnabledRef.current}>
-                    Ativar comandos de voz (ABRE / AGORA / CANCELAR)
+                    Ativar comandos de voz (ABRE / CANCELAR)
                   </button>
 
                   {micEnabled ? (
-                    <button className="primary" onClick={() => { voiceControllerRef.current?.cancel(); closeVoiceChannel("Canal fechado manualmente."); }}>Fechar canal de voz</button>
+                    <button className="primary" onClick={() => voiceControllerRef.current?.cancel()}>Fechar canal de voz</button>
                   ) : (
                     <button className="secondary" onClick={() => openVoiceChannel("botão")}>Abrir canal de voz manualmente</button>
                   )}
@@ -627,7 +631,7 @@ export default function App() {
       <section className="features">
         <article><div className="feature-icon">◉</div><h4>Voz compartilhada</h4><p>Todos acompanham a mesma conversa com a IA.</p></article>
         <article><div className="feature-icon">▤</div><h4>Materiais de estudo</h4><p>Apostilas, PDFs, imagens e exercícios em um só lugar.</p></article>
-        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE, PERGUNTA, REPITA, ERRO, CONFIRMAR e CANCELAR controlam a interação.</p></article>
+        <article><div className="feature-icon">⌘</div><h4>Comandos por voz</h4><p>ABRE inicia a pergunta, uma pausa envia automaticamente e CANCELAR interrompe.</p></article>
       </section>
 
       <footer>OGRO NÃO, CICLOPE <span>•</span> CONSTRUINDO JUNTOS</footer>
