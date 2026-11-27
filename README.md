@@ -9,7 +9,7 @@ Aplicação de estudo coletivo com salas de voz, histórico compartilhado e IA i
 - Chat da sala com histórico compartilhado no Supabase.
 - Respostas de texto geradas pela Groq.
 - Voz pt-BR sintetizada uma vez no servidor pelo Google Cloud Text-to-Speech e transmitida a todos os participantes como uma faixa de áudio LiveKit.
-- Comandos de voz: `ABRE`, `AGORA` e `CANCELAR`.
+- Comandos de voz: `ABRE` e `AGORA`.
 
 ## Desenvolvimento
 
@@ -28,6 +28,6 @@ Mantenha as variáveis existentes de Groq e Supabase. Para ativar a voz, configu
 
 1. Entre na sala, conecte o áudio e ative a reprodução dos participantes.
 2. Ative os comandos de voz.
-3. Diga `ABRE`, faça sua pergunta e diga `AGORA` isoladamente para enviar.
+3. Diga `ABRE`, faça sua pergunta e diga `AGORA` para enviar.
 4. O Ciclope responde por texto e voz para todos na sala.
-5. Diga `CANCELAR` para descartar a pergunta ou interromper a interação.
+5. Para interromper uma interação, use o botão **Encerrar interação / parar resposta** na tela.

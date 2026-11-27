@@ -30,6 +30,6 @@ Depois de enviar os arquivos ao GitHub, aguarde o deploy da Vercel terminar. Só
 
 - `ABRE`: abre o microfone e inicia a captura da pergunta.
 - `AGORA`: finaliza e envia a pergunta à IA.
-- `CANCELAR`: descarta a pergunta ou interrompe a geração/reprodução.
 
-Diga `AGORA` isoladamente, depois de terminar a pergunta.
+
+Diga `AGORA` depois de terminar a pergunta.

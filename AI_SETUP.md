@@ -6,7 +6,7 @@
 - O endpoint server-side `/api/ai/speech` converte essa resposta em áudio pt-BR usando Google Cloud Text-to-Speech.
 - O navegador que iniciou a pergunta publica a gravação como uma faixa de áudio LiveKit chamada `ciclope-tts`.
 - Todos os participantes da sala recebem a mesma faixa. A síntese acontece uma única vez por resposta.
-- Os únicos comandos de voz são `ABRE`, `AGORA` e `CANCELAR`.
+- Os únicos comandos de voz são `ABRE` e `AGORA`.
 
 ## 1. Variáveis da Vercel
 
@@ -70,9 +70,9 @@ Quem for fazer a pergunta diz:
 2. Faça a pergunta normalmente. Pausas não enviam a pergunta.
 3. **AGORA** — finaliza a pergunta, fecha o microfone e envia o texto à Groq.
 4. O Ciclope grava a resposta no chat, gera o áudio uma vez no servidor e transmite a mesma voz a todos pelo LiveKit.
-5. **CANCELAR** — descarta uma pergunta ainda não enviada ou interrompe a geração/reprodução em andamento. Outro participante também pode pedir o cancelamento.
+5. Para interromper uma interação em andamento, use o botão de encerramento na interface.
 
-Diga `AGORA` isoladamente, depois de terminar a pergunta. Recomenda-se usar fones de ouvido para reduzir eco e evitar que o microfone capte o som dos alto-falantes.
+Diga `AGORA` depois de terminar a pergunta. O reconhecimento de voz no Chrome Android depende do serviço de voz do próprio navegador/Android e de uma conexão de internet ativa. Recomenda-se usar fones de ouvido para reduzir eco e evitar que o microfone capte o som dos alto-falantes.
 
 A sala processa uma pergunta de voz por vez. Se outra pessoa já estiver usando o Ciclope, aguarde a vez dela.
 
@@ -83,8 +83,8 @@ A sala processa uma pergunta de voz por vez. Se outra pessoa já estiver usando 
 3. Nos dois, ative os comandos de voz.
 4. No primeiro dispositivo, diga `ABRE`, faça uma pergunta e diga `AGORA`.
 5. Confirme que a pergunta e a resposta aparecem no chat dos dois dispositivos e que ambos ouvem a voz do Ciclope.
-6. Inicie outra pergunta e diga `CANCELAR` antes de `AGORA`; a pergunta não deve ser enviada.
-7. Durante uma resposta falada, diga `CANCELAR`; a reprodução deve parar para a sala.
+6. Inicie outra pergunta e confirme que somente `AGORA` envia o texto à IA.
+7. Durante uma resposta falada, use o botão de encerramento para interromper a reprodução.
 8. Repita o teste com apenas um participante conectado.
 
 ## 6. Tempo da função Vercel
